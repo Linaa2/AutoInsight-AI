@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.Python
+
+# Environnement virtuel
+.env
+.venv
+env/
+venv/
+
+# Secrets — ne jamais committer
+.env.local
+.env.production
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Data lourde (sauf le sample de démo)
+data/*.csv
+data/*.xlsx
+data/*.parquet
+!data/sample_sales.csv
+
+# ChromaDB
+chroma_db/
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
