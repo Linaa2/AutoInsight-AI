@@ -7,7 +7,7 @@ authors = [
   { name = "RHIATI HAZIME Lina", email = "lina.rhiati2@gmail.com" },
   { name = "BOUTROUFT Younes", email = "bft.younes@gmail.com" },
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 readme = "README.md"
 license = "MIT"
 

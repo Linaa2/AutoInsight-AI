@@ -5,9 +5,10 @@ on:
     branches: [main, develop]
   push:
     branches: [main, develop]
+  workflow_dispatch:
 
 env:
-  PYTHON_VERSION: "3.10"
+  PYTHON_VERSION: "3.11"
   GIT_SHA: ${{ github.sha }}
 
 jobs:
