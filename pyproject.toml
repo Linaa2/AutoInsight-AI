@@ -1,8 +1,15 @@
 [project]
 name = "autoinsight-ai"
 version = "1.0.0"
-description = "Système multi-agent d'analyse de données"
+description = "An AI agent that analyzes datasets and generates actionable insights in a user-friendly manner."
+authors = [
+  { name = "ELAMINE Mohammed", email = "elamine.mohammed.14@gmail.com" },
+  { name = "RHIATI HAZIME Lina", email = "lina.rhiati2@gmail.com" },
+  { name = "BOUTROUFT Younes", email = "bft.younes@gmail.com" },
+]
 requires-python = ">=3.10"
+readme = "README.md"
+license = "MIT"
 
 dependencies = [
     # Orchestration
@@ -18,7 +25,7 @@ dependencies = [
     # Monitoring
     "langfuse>=2.0.0",
 
-    # Mémoire
+    # Memory
     "chromadb>=0.5.0",
     "langchain-chroma>=0.1.0",
 
@@ -27,13 +34,13 @@ dependencies = [
     "numpy>=1.26.0",
     "openpyxl>=3.1.0",
 
-    # Visualisation
+    # Visualization
     "plotly>=5.20.0",
 
     # UI
     "streamlit>=1.35.0",
 
-    # Utils
+    # Utilities
     "python-dotenv>=1.0.0",
     "pyyaml>=6.0.0",
     "tenacity>=8.3.0",
@@ -41,7 +48,49 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0.0",
-    "black>=24.0.0",
-    "ruff>=0.4.0",
+    "mypy>=1.19.1",
+    "pre-commit>=4.5.1",
+    "pytest>=9.0.2",
+    "pytest-cov>=5.0",
+    "ruff>=0.15.2",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E", # pycodestyle errors
+    "W", # pycodestyle warnings
+    "F", # pyflakes
+    "I", # isort
+    "B", # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+    "ARG", # flake8-unused-arguments
+    "SIM", # flake8-simplify
+    "TCH", # flake8-type-checking
+    "PTH", # flake8-use-pathlib
+    "RUF", # Ruff-specific rules
+]
+ignore = [
+    "E501", # line too long (handled by formatter)
+    "B008", # do not perform function calls in argument defaults
+    "B905", # zip without explicit strict
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_configs = true
+warn_return_any = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+mypy_path = ["."]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -37,6 +37,9 @@ chroma_db/
 *.log
 logs/
 
+# Temporary files
+tmp/
+
 # Streamlit
 .streamlit/secrets.toml
 

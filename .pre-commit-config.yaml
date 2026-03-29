@@ -1,0 +1,23 @@
+fail_fast: false
+minimum_pre_commit_version: "3.0.0"
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: "v0.8.6"
+    hooks:
+      - id: ruff
+        name: "Ruff Lint"
+        language_version: python3.11
+      - id: ruff-format
+        name: "Ruff Auto-Fix"
+        language_version: python3.11
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: "v6.0.0"
+    hooks:
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+        exclude: "^uv\\.lock$"
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
