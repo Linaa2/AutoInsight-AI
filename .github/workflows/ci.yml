@@ -36,10 +36,10 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Type-check
-        run: uv run mypy agents app graph tools utils
+        run: uv run mypy agents app graph tools utils visualization
 
       - name: Unit tests
-        run: uv run pytest -q --maxfail=1 --disable-warnings --cov=agents --cov=app --cov=graph --cov=tools --cov=utils --cov-report=xml -m "not integration"
+        run: uv run pytest -q --maxfail=1 --disable-warnings --cov=agents --cov=app --cov=graph --cov=tools --cov=utils --cov=visualization --cov-report=xml -m "not integration"
 
       - name: Upload coverage
         uses: actions/upload-artifact@v4

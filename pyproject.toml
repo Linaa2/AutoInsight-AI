@@ -107,3 +107,6 @@ testpaths = ["tests"]
 dev = [
     "types-pyyaml>=6.0.12.20250915",
 ]
+markers = [
+    "smoke: quick sanity-check tests that verify a module is importable and callable",
+]

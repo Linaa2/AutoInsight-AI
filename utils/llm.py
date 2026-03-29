@@ -1,23 +1,56 @@
-"""LLM client factory for AutoInsight-AI.
+"""Minimal LLM client for calling a local Ollama model.
 
-Supports Ollama (primary, local) and Gemini (optional cloud fallback).
-Model selection is task-aware: use the text model for profiler/analyst/reporter
-and the code model for visualizer/text-to-code agents.
+This module wraps the ``ollama`` Python library and exposes a single function,
+``call_llm``, that is used by every agent in the pipeline.
 
-Configuration (environment variables)::
-
-    LLM_PROVIDER       = ollama          # or gemini
-    OLLAMA_BASE_URL    = http://localhost:11434
-    OLLAMA_TEXT_MODEL  = qwen3:14b
-    OLLAMA_CODE_MODEL  = qwen2.5-coder:14b
-    LLM_TIMEOUT        = 60
-
-Apple Silicon note: Ollama manages Metal (MPS) acceleration internally.
-Do NOT pass device="mps" or similar flags to ChatOllama — LangChain's
-ChatOllama client does not expose a device parameter.
+Configuration via environment variables (see ``.env.example``):
+    - ``OLLAMA_MODEL``    — model name        (default: ``"mistral"``)
+    - ``OLLAMA_BASE_URL`` — Ollama server URL  (default: ``"http://localhost:11434"``)
+    - ``LLM_TIMEOUT``     — request timeout s  (default: ``15``)
 """
 
 from __future__ import annotations
+
+import os
+
+import ollama
+
+# Read configuration once at module level — mirrors variables in .env.example
+_MODEL: str = os.getenv("OLLAMA_MODEL", "mistral")
+_HOST: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "15"))
+
+
+def call_llm(prompt: str, model: str | None = None) -> str:
+    """Send *prompt* to the local Ollama model and return the text response.
+
+    Args:
+        prompt: The full prompt to send to the model.
+        model:  Override the default model name from the environment.
+                Defaults to ``OLLAMA_MODEL`` env var (or ``"mistral"``).
+
+    Returns:
+        The model's response as a plain string.
+
+    Raises:
+        RuntimeError: If the Ollama call fails — server not reachable, model not
+                      found, timeout, or any other network/runtime error.
+    """
+    resolved_model = model or _MODEL
+    client = ollama.Client(host=_HOST, timeout=_TIMEOUT)
+    try:
+        response = client.chat(
+            model=resolved_model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        # The ollama library returns a ChatResponse object; coerce to str for safety.
+        return str(response.message.content)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Ollama call failed (model={resolved_model!r}, host={_HOST!r}): {exc}"
+        ) from exc
+
+"""LLM client factory supporting Ollama (local) and Google Gemini."""
 
 import os
 from typing import TYPE_CHECKING, Literal
