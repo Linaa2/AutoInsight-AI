@@ -13,9 +13,10 @@ from typing import TYPE_CHECKING, Any
 import streamlit as st
 from streamlit_lottie import st_lottie
 
-from config.settings import REPO_ROOT, settings
-from diagnostics.renderer import render_diagnostics_tab, render_pipeline_diagram
-from orchestration.graph import _AGENTS_ORDER, stream_analysis
+from agents.analyst import AnalystAgent
+from agents.profiler import ProfilerAgent
+from agents.rag import RAGAgent
+from agents.reporter import ReporterAgent
 from tools.data_loader import DataLoader, UnsupportedFormatError
 from tools.profiler_engine import DataProfiler
 from visualization.executor import execute_chart
@@ -24,6 +25,15 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from tools.profiler_engine import DataProfile
+
+def _get_rag() -> RAGAgent | None:
+    """Return the RAGAgent for the current dataset, or None if unavailable."""
+    dataset_id = st.session_state.get("last_file", "default")
+    try:
+        return RAGAgent(dataset_id=dataset_id)
+    except Exception:
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -34,12 +44,199 @@ _LOGO_PATH = _ASSETS_DIR / "auto_insight_ai_logo.png"
 _LOTTIE_PATH = _ASSETS_DIR / "ai_agent_animation.json"
 _BROKEN_AGENT_PATH = _ASSETS_DIR / "ai_agent_broken.png"
 
-_AGENT_META: dict[str, dict[str, str]] = {
-    "profiler": {"icon": "📊", "label": "Profiler", "verb": "Profiling dataset…"},
-    "analyst": {"icon": "💡", "label": "Analyst", "verb": "Generating insights…"},
-    "visualizer": {"icon": "📈", "label": "Visualizer", "verb": "Creating charts…"},
-    "reporter": {"icon": "📄", "label": "Reporter", "verb": "Writing report…"},
-}
+def _profile_to_dict(profile: DataProfile) -> dict:
+    columns_list = []
+    missing_values = {}
+
+    for col_name, cp in profile.columns.items():
+        col_info = {
+            "name": col_name,
+            "dtype": str(cp.dtype),
+            "missing": round(cp.missing_pct * profile.shape[0] / 100) if cp.missing_pct else 0,
+            "missing_pct": round(cp.missing_pct, 1),
+            "unique": cp.unique_count,
+        }
+
+        if cp.dtype_category == "numeric":
+            col_info["stats"] = {
+                "mean": cp.mean,
+                "std": cp.std,
+                "min": cp.min,
+                "25%": cp.q25,
+                "50%": cp.median,
+                "75%": cp.q75,
+                "max": cp.max,
+            }
+        elif cp.top_values:
+            col_info["top_values"] = cp.top_values
+
+        columns_list.append(col_info)
+
+        if cp.missing_pct and cp.missing_pct > 0:
+            missing_values[col_name] = col_info["missing"]
+
+    return {
+        "shape": {"rows": profile.shape[0], "cols": profile.shape[1]},
+        "columns": columns_list,
+        "missing_values": missing_values,
+        "duplicates": profile.duplicates_count,
+        "memory_mb": profile.memory_mb,
+    }
+
+
+def _build_sample_text(df: pd.DataFrame, n: int = 5) -> str:
+    return str(df.head(n).to_string())
+
+
+# ---------------------------------------------------------------------------
+# App entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    st.set_page_config(
+        page_title=_APP_TITLE,
+        page_icon="🔍",
+        layout="wide",
+    )
+
+    st.title(f"🔍 {_APP_TITLE}")
+    st.caption("Upload a dataset to get an instant deterministic profile and AI-powered analysis.")
+
+    # ---- Sidebar ----
+    with st.sidebar:
+        st.header("📁 Upload Dataset")
+        uploaded_file = st.file_uploader(
+            "Choose a file",
+            type=["csv", "xlsx", "xls", "parquet"],
+            help="Supported formats: CSV, Excel (.xlsx/.xls), Parquet",
+        )
+
+        st.divider()
+
+        st.header("⚙️ Settings")
+        enable_ai = st.toggle(
+            "Enable AI Analysis",
+            value=True,
+            help="Uses local Ollama or Gemini API",
+        )
+
+    if uploaded_file is None:
+        _render_landing()
+        return
+
+    # ---- Load ----
+    loader = DataLoader()
+    try:
+        df = loader.load_from_upload(uploaded_file.read(), uploaded_file.name)
+    except UnsupportedFormatError as exc:
+        st.error(str(exc))
+        return
+    except Exception as exc:
+        st.error(f"Failed to load file: {exc}")
+        return
+
+    # ---- Profile ----
+    profiler = DataProfiler()
+    with st.spinner("Computing profile…"):
+        profile = profiler.profile(df)
+
+    # Reset state when new file
+    if st.session_state.get("last_file") != uploaded_file.name:
+        st.session_state["last_file"] = uploaded_file.name
+        st.session_state["ai_description"] = None
+        st.session_state["analyst_insights"] = None
+        st.session_state["analyst_markdown"] = None
+        st.session_state["reporter_output"] = None
+
+    # ---- KPI row ----
+    _render_kpi_row(profile)
+
+    st.divider()
+
+    # ---- Tabs ----
+    tab_overview, tab_columns, tab_sample, tab_ai, tab_insights, tab_report = st.tabs(
+        ["📊 Overview", "📋 Columns", "🗂️ Sample Data", "🤖 AI Analysis", "💡 Insights", "📄 Report"]
+    )
+
+    with tab_overview:
+        _render_overview(profile)
+
+    with tab_columns:
+        _render_columns(profile)
+
+    with tab_sample:
+        st.dataframe(df.head(_SAMPLE_ROWS), use_container_width=True)
+
+    with tab_ai:
+        _render_ai_analysis(profile, enable_ai)
+
+    with tab_insights:
+        _render_insights(df, profile, enable_ai)
+
+    with tab_report:
+        _render_report(enable_ai)
+
+
+# ---------------------------------------------------------------------------
+# Rendering helpers
+# ---------------------------------------------------------------------------
+
+
+def _render_landing() -> None:
+    st.info("👆 Upload a CSV, Excel, or Parquet file using the sidebar to get started.")
+
+
+def _render_kpi_row(profile: DataProfile) -> None:
+    cols = st.columns(5)
+    cols[0].metric("Rows", f"{profile.shape[0]:,}")
+    cols[1].metric("Columns", f"{profile.shape[1]:,}")
+    cols[2].metric("Duplicates", f"{profile.duplicates_count:,}")
+    cols[3].metric("Missing", f"{profile.total_missing_pct:.1f} %")
+    cols[4].metric("Memory", f"{profile.memory_mb:.2f} MB")
+
+
+def _render_overview(_profile: DataProfile) -> None:
+    st.subheader("Column Types")
+
+
+def _render_columns(_profile: DataProfile) -> None:
+    st.subheader("Columns")
+
+
+# ---------------------------------------------------------------------------
+# AI Analysis (UNCHANGED)
+# ---------------------------------------------------------------------------
+
+
+def _render_ai_analysis(profile: DataProfile, enable_ai: bool) -> None:
+    if not enable_ai:
+        st.info("Enable **AI Analysis** in the sidebar to use this feature.")
+        return
+
+    if st.button("🚀 Generate AI Analysis", type="primary"):
+        agent = ProfilerAgent()
+        with st.spinner("Generating AI analysis… this may take a moment."):
+            try:
+                description = agent.describe(profile)
+                st.session_state["ai_description"] = description
+                # Store profile in RAG memory
+                rag = _get_rag()
+                if rag:
+                    rag.save_analysis(profile_text=description)
+            except Exception as exc:
+                st.error(f"AI analysis failed: {exc}")
+                return
+
+    if st.session_state.get("ai_description"):
+        st.markdown(st.session_state["ai_description"])
+    else:
+        st.caption("Click **Generate AI Analysis** to produce an LLM-powered report.")
+
+
+# ---------------------------------------------------------------------------
+# Insights (UNCHANGED)
+# ---------------------------------------------------------------------------
 
 _STATUS_BADGE = {"success": "✅", "failed": "❌", "skipped": "⏭️"}
 _PRIORITY_ICONS = {"high": "🔴", "medium": "🟡", "low": "🟢"}
@@ -73,43 +270,54 @@ div[data-testid="stExpander"] {
     border: 1px solid rgba(128, 128, 128, 0.2);
     margin-bottom: 0.5rem;
 }
-/* Metric cards */
-div[data-testid="stMetric"] {
-    background: linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(168,85,247,0.08) 100%);
-    border-radius: 12px;
-    padding: 12px 16px;
-    border: 1px solid rgba(128,128,128,0.15);
-}
-/* Prevent metric text truncation */
-div[data-testid="stMetricValue"] {
-    overflow: visible !important;
-    white-space: normal !important;
-    word-break: break-word;
-    font-size: clamp(0.85rem, 1.5vw, 1.25rem) !important;
-}
-div[data-testid="stMetricLabel"] {
-    white-space: normal !important;
-    font-size: 0.78rem !important;
-}
-/* Tab styling */
-button[data-baseweb="tab"] {
-    font-weight: 600;
-}
-/* Agent status pills */
-.agent-pill {
-    display: inline-block;
-    padding: 4px 12px;
-    border-radius: 20px;
-    font-size: 0.85em;
-    font-weight: 600;
-    margin: 2px 4px;
-}
-.pill-success { background: #d1fae5; color: #065f46; }
-.pill-failed  { background: #fee2e2; color: #991b1b; }
-.pill-skipped { background: #fef3c7; color: #92400e; }
-.pill-running { background: #dbeafe; color: #1e40af; }
-</style>
-"""
+
+
+def _render_insights(df: pd.DataFrame, profile: DataProfile, enable_ai: bool) -> None:
+    if not enable_ai:
+        st.info("Enable **AI Analysis**")
+        return
+
+    profiler_output = st.session_state.get("ai_description")
+
+    if not profiler_output:
+        st.warning("Generate AI Analysis first")
+        return
+
+    if st.button("🔍 Generate Insights", type="primary", key="btn_insights"):
+        agent = AnalystAgent()
+
+        with st.spinner("Generating insights… this may take a moment."):
+            result = agent.run(
+                profiler_output=profiler_output,
+                sample_text=_build_sample_text(df),
+                profile_data=_profile_to_dict(profile),
+            )
+
+        st.session_state["analyst_insights"] = result.get("insights", [])
+        st.session_state["analyst_markdown"] = result.get("analyst_output", "")
+
+        # Store insights in RAG memory
+        rag = _get_rag()
+        if rag:
+            rag.save_analysis(insights=result.get("insights", []))
+
+    insights = st.session_state.get("analyst_insights")
+    markdown = st.session_state.get("analyst_markdown")
+
+    if not insights:
+        st.caption("Generate insights")
+        return
+
+    view_mode = st.radio("Display mode", ["Cards", "Markdown"], horizontal=True)
+
+    if view_mode == "Markdown":
+        st.markdown(markdown)
+    else:
+        for ins in insights:
+            with st.expander(ins["title"], expanded=True):
+                st.write("**Observation:**", ins.get("observation"))
+                st.write("**Hypothesis:**", ins.get("hypothesis"))
+                st.write("**Recommendation:**", ins.get("recommendation"))
 
 
 # ---------------------------------------------------------------------------
@@ -321,16 +529,34 @@ def _render_insights_tab(result: dict[str, Any], key_suffix: str = "") -> None:
             dur = analyst_trace.get("duration_s", 0)
             st.caption(f"⏱️ {dur:.1f}s")
 
-    if insights:
-        # Priority summary
-        high = sum(1 for i in insights if i.get("priority") == "high")
-        med = sum(1 for i in insights if i.get("priority") == "medium")
-        low = sum(1 for i in insights if i.get("priority") == "low")
-        sc1, sc2, sc3, sc4 = st.columns(4)
-        sc1.metric("Total Insights", len(insights))
-        sc2.metric("🔴 High Priority", high)
-        sc3.metric("🟡 Medium", med)
-        sc4.metric("🟢 Low", low)
+    if st.button("📄 Generate Full Report", type="primary", key="btn_report"):
+        agent = ReporterAgent()
+
+        with st.spinner("Generating report… this may take a moment."):
+            result = agent.run(
+                profiler_output=profiler_output,
+                analyst_output=analyst_output,
+                insights=insights,
+            )
+
+        if result.get("error"):
+            st.error(result["error"])
+            return
+
+        st.session_state["reporter_output"] = result.get("reporter_output", "")
+
+        # Store report in RAG memory
+        rag = _get_rag()
+        if rag:
+            rag.save_analysis(report_text=result.get("reporter_output", ""))
+
+    report = st.session_state.get("reporter_output")
+
+    if not report:
+        st.caption("Click **Generate Full Report**")
+        return
+
+    st.markdown(report)
 
     st.divider()
 

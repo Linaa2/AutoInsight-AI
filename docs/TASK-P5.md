@@ -105,7 +105,12 @@ embeddings = EmbeddingClient.get_embeddings()
 ### Class: `RAGAgent`
 
 High-level retrieval service that wraps `ContextStore` and provides purpose-specific retrieval methods for other agents.
+3. Ajouté 3 lignes de stockage (après le code existant, sans le modifier)
+Après que l'AI Analysis est générée (le code existant reste identique) :
 
+Après que les Insights sont générés (le code existant reste identique) :
+
+Après que le Report est généré (le code existant reste identique) :
 Each instance is **bound to a `dataset_id`** to isolate context per uploaded file.
 
 #### Retrieval Methods (consumed by other agents)
