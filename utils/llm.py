@@ -1,8 +1,9 @@
-import os
 import logging
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_community.chat_models import ChatOllama
+import os
+
 from dotenv import load_dotenv
+from langchain_community.chat_models import ChatOllama
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 load_dotenv()
 
@@ -47,6 +48,7 @@ def get_llm(temperature: float = 0.3):
 def get_langfuse_handler():
     try:
         from langfuse.callback import CallbackHandler
+
         return CallbackHandler(
             public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
             secret_key=os.getenv("LANGFUSE_SECRET_KEY"),

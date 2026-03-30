@@ -17,6 +17,7 @@ format: ## Check code formatting with ruff
 	uv run ruff format --check
 
 fix: ## Auto-fix formatting (trailing whitespace, end-of-file)
+	uv run ruff format
 	uv run pre-commit run trailing-whitespace --all-files || true
 	uv run pre-commit run end-of-file-fixer --all-files || true
 
