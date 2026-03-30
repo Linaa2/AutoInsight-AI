@@ -17,35 +17,32 @@ dependencies = [
     "langgraph>=0.1.0",
     "langchain-core>=0.2.0",
     "langchain-community>=0.2.0",
-
     # LLMs
     "langchain-google-genai>=1.0.0",
     "ollama>=0.2.0",
-
     # Monitoring
     "langfuse>=2.0.0",
-
     # Memory
     "chromadb>=0.5.0",
     "langchain-chroma>=0.1.0",
-
     # Data
     "pandas>=2.0.0",
     "numpy>=1.26.0",
     "openpyxl>=3.1.0",
     "pyarrow>=14.0.0",
-
     # Visualization
     "plotly>=5.20.0",
-
     # UI
     "streamlit>=1.35.0",
-
+    "streamlit-lottie>=0.0.5",
+    # Monitoring / Telemetry
+    "psutil>=5.9.0",
     # Utilities
     "python-dotenv>=1.0.0",
     "pyyaml>=6.0.0",
     "tenacity>=8.3.0",
     "langchain-ollama>=1.0.1",
+    "streamlit-flow-component>=1.6.1",
 ]
 
 [project.optional-dependencies]
@@ -119,11 +116,12 @@ include = ["agents*", "app*", "config*", "evaluation*", "graph*", "tools*", "uti
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "smoke: quick sanity-check tests that verify a module is importable and callable",
+    "integration: tests that require external services (Ollama, network)",
+]
 
 [dependency-groups]
 dev = [
     "types-pyyaml>=6.0.12.20250915",
-]
-markers = [
-    "smoke: quick sanity-check tests that verify a module is importable and callable",
 ]

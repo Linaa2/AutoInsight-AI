@@ -1,42 +1,96 @@
 """LangGraph orchestration graph for AutoInsight-AI.
 
-This module defines the multi-agent workflow as a LangGraph ``StateGraph``.
-Each agent is a thin **node function** that:
+This module defines the **canonical** multi-agent workflow as a
+``StateGraph``.  Every agent is wired as a thin node function that:
 
 1. Reads inputs from :class:`~orchestration.state.PipelineState`.
-2. Delegates to the corresponding agent class (``agents/``).
-3. Writes outputs back into the state.
+2. Delegates to the corresponding agent class in ``agents/``.
+3. Writes outputs (including a trace entry) back into the state.
 
-Current graph::
+Graph flow::
 
-    START → profiler_node → visualizer_node → END
-
-Future extensions (analyst, reporter, critic) can be added as new nodes
-with edges inserted into the sequence or as conditional branches.
+    START → profiler_node → analyst_node → visualizer_node → reporter_node → END
 
 Usage::
 
-    from orchestration.graph import build_graph
+    from orchestration.graph import build_graph, run_analysis
 
-    graph = build_graph()
-    result = graph.invoke({
-        "df_dict": df.to_dict(orient="records"),
-        "file_name": "sales.csv",
-    })
+    result = run_analysis(df, file_name="sales.csv")
 """
 
 from __future__ import annotations
 
 import dataclasses
+import logging
+import time
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 import pandas as pd
 from langgraph.graph import END, START, StateGraph
 
+from agents.analyst import AnalystAgent
 from agents.profiler import ProfilerAgent
+from agents.reporter import ReporterAgent
 from agents.visualizer import run_visualization_pipeline
-from orchestration.state import PipelineState
+from diagnostics.telemetry import (
+    NodeTelemetry,
+    build_telemetry,
+    build_telemetry_no_llm,
+    collect_resource_snapshot,
+)
+from orchestration.state import NodeTraceEntry, PipelineState
 from tools.profiler_engine import DataProfiler
 from visualization.schemas import VisualizerRequest
+
+logger = logging.getLogger(__name__)
+
+_AGENTS_ORDER = ["profiler", "analyst", "visualizer", "reporter"]
+
+
+# ---------------------------------------------------------------------------
+# Trace helpers
+# ---------------------------------------------------------------------------
+
+
+def _trace_entry(
+    node: str,
+    *,
+    status: str,
+    started: float,
+    keys_read: list[str],
+    keys_written: list[str],
+    summary: str = "",
+    error: str | None = None,
+    telemetry: NodeTelemetry | None = None,
+) -> NodeTraceEntry:
+    """Build a :class:`NodeTraceEntry` for a node execution."""
+    finished = time.time()
+    entry = NodeTraceEntry(
+        node=node,
+        status=status,
+        started_at=datetime.fromtimestamp(started, tz=UTC).isoformat(),
+        finished_at=datetime.fromtimestamp(finished, tz=UTC).isoformat(),
+        duration_s=round(finished - started, 3),
+        keys_read=keys_read,
+        keys_written=keys_written,
+        summary=summary,
+        error=error,
+    )
+    if telemetry:
+        entry["telemetry"] = cast("dict[str, Any]", telemetry)
+    return entry
+
+
+def _append_trace(state: PipelineState, entry: NodeTraceEntry) -> list[NodeTraceEntry]:
+    """Return the existing trace list with *entry* appended."""
+    existing: list[NodeTraceEntry] = list(state.get("graph_trace") or [])
+    existing.append(entry)
+    return existing
+
 
 # ---------------------------------------------------------------------------
 # Node functions
@@ -44,65 +98,174 @@ from visualization.schemas import VisualizerRequest
 
 
 def profiler_node(state: PipelineState) -> PipelineState:
-    """Run the deterministic profiler + LLM profiler agent.
+    """Run deterministic profiling + LLM interpretation.
 
-    Reads:
-        ``df_dict`` — the dataset as a list of row dicts.
-
-    Writes:
-        ``profile_data``     — raw profile as a dict.
-        ``profile_markdown`` — LLM-generated markdown report.
-        ``error``            — set on failure.
+    Reads:  ``df_dict``
+    Writes: ``profile_data``, ``profile_markdown``
     """
+    t0 = time.time()
+    res_before = collect_resource_snapshot()
     try:
         df = pd.DataFrame(state["df_dict"])
         profiler = DataProfiler()
         profile = profiler.profile(df)
 
         agent = ProfilerAgent()
+        llm_start = time.time()
         markdown = agent.describe(profile)
+        llm_end = time.time()
 
+        res_after = collect_resource_snapshot()
+        telem = build_telemetry(
+            task="text",
+            llm_start=llm_start,
+            llm_end=llm_end,
+            resource_before=res_before,
+            resource_after=res_after,
+        )
+        entry = _trace_entry(
+            "profiler",
+            status="success",
+            started=t0,
+            keys_read=["df_dict"],
+            keys_written=["profile_data", "profile_markdown"],
+            summary=f"Profiled {profile.shape[0]} rows x {profile.shape[1]} cols",
+            telemetry=telem,
+        )
         return {
             "profile_data": profile.to_dict(),
             "profile_markdown": markdown,
+            "graph_trace": _append_trace(state, entry),
         }
     except Exception as exc:
-        return {"error": f"Profiler failed: {exc}"}
+        msg = f"Profiler failed: {exc}"
+        logger.exception(msg)
+        res_after = collect_resource_snapshot()
+        telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
+        entry = _trace_entry(
+            "profiler",
+            status="failed",
+            started=t0,
+            keys_read=["df_dict"],
+            keys_written=[],
+            error=msg,
+            telemetry=telem,
+        )
+        return {"error": msg, "graph_trace": _append_trace(state, entry)}
+
+
+def analyst_node(state: PipelineState) -> PipelineState:
+    """Generate structured insights from the profile.
+
+    Reads:  ``df_dict``, ``profile_data``, ``profile_markdown``
+    Writes: ``insights``, ``insights_markdown``
+    """
+    t0 = time.time()
+    profile_md = state.get("profile_markdown")
+    if not profile_md:
+        entry = _trace_entry(
+            "analyst",
+            status="skipped",
+            started=t0,
+            keys_read=["profile_markdown"],
+            keys_written=[],
+            summary="Skipped — no profile_markdown available",
+        )
+        return {"graph_trace": _append_trace(state, entry)}
+
+    res_before = collect_resource_snapshot()
+    try:
+        df = pd.DataFrame(state["df_dict"])
+        sample_text = df.head(5).to_string()
+        profile_data = state.get("profile_data")
+
+        agent = AnalystAgent()
+        llm_start = time.time()
+        result = agent.run(
+            profiler_output=profile_md,
+            sample_text=sample_text,
+            profile_data=profile_data,
+        )
+        llm_end = time.time()
+
+        insights = result.get("insights", [])
+        insights_md = result.get("analyst_output", "")
+
+        res_after = collect_resource_snapshot()
+        telem = build_telemetry(
+            task="text",
+            llm_start=llm_start,
+            llm_end=llm_end,
+            resource_before=res_before,
+            resource_after=res_after,
+        )
+        entry = _trace_entry(
+            "analyst",
+            status="success",
+            started=t0,
+            keys_read=["df_dict", "profile_data", "profile_markdown"],
+            keys_written=["insights", "insights_markdown"],
+            summary=f"Generated {len(insights)} insights",
+            telemetry=telem,
+        )
+        return {
+            "insights": insights,
+            "insights_markdown": insights_md,
+            "graph_trace": _append_trace(state, entry),
+        }
+    except Exception as exc:
+        msg = f"Analyst failed: {exc}"
+        logger.exception(msg)
+        res_after = collect_resource_snapshot()
+        telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
+        entry = _trace_entry(
+            "analyst",
+            status="failed",
+            started=t0,
+            keys_read=["df_dict", "profile_data", "profile_markdown"],
+            keys_written=[],
+            error=msg,
+            telemetry=telem,
+        )
+        return {"error": msg, "graph_trace": _append_trace(state, entry)}
 
 
 def visualizer_node(state: PipelineState) -> PipelineState:
-    """Run the visualizer pipeline if profile + insights are available.
+    """Propose and execute charts based on the profile and insights.
 
-    Reads:
-        ``df_dict``, ``profile_markdown``, ``insights_markdown``.
-
-    Writes:
-        ``visualization_result`` — serialised pipeline result (chart specs + metadata).
-        ``error``                — set on failure.
-
-    If ``insights_markdown`` is absent, the node uses the profile markdown
-    as a stand-in so the visualizer is still exercisable during testing.
+    Reads:  ``df_dict``, ``profile_markdown``, ``insights_markdown``
+    Writes: ``visualization_result``
     """
+    t0 = time.time()
     profile_md = state.get("profile_markdown")
     if not profile_md:
-        return {"error": "Visualizer skipped: no profile_markdown available."}
+        entry = _trace_entry(
+            "visualizer",
+            status="skipped",
+            started=t0,
+            keys_read=["profile_markdown"],
+            keys_written=[],
+            summary="Skipped — no profile_markdown available",
+        )
+        return {"graph_trace": _append_trace(state, entry)}
 
-    # Use analyst insights if present, otherwise fall back to profile text.
-    insights = state.get("insights_markdown") or profile_md
+    insights_md = state.get("insights_markdown") or profile_md
 
+    res_before = collect_resource_snapshot()
     try:
         df = pd.DataFrame(state["df_dict"])
         columns_info = ", ".join(f"{col} ({dtype})" for col, dtype in df.dtypes.items())
         request = VisualizerRequest(
             profile_markdown=profile_md,
-            insights_markdown=insights,
+            insights_markdown=insights_md,
             columns_info=columns_info,
         )
 
+        llm_start = time.time()
         result = run_visualization_pipeline(df, request)
+        llm_end = time.time()
 
-        # Serialise for state storage (figures are not JSON-safe, store specs only).
-        serialised: dict = {
+        serialised: dict[str, Any] = {
             "raw_llm_output": result.raw_llm_output,
             "parsing_error": result.parsing_error,
             "charts": [
@@ -116,9 +279,130 @@ def visualizer_node(state: PipelineState) -> PipelineState:
                 for rc in result.charts
             ],
         }
-        return {"visualization_result": serialised}
+
+        n_ok = sum(1 for rc in result.charts if rc.execution.success)
+        res_after = collect_resource_snapshot()
+        telem = build_telemetry(
+            task="code",
+            llm_start=llm_start,
+            llm_end=llm_end,
+            resource_before=res_before,
+            resource_after=res_after,
+        )
+        entry = _trace_entry(
+            "visualizer",
+            status="success",
+            started=t0,
+            keys_read=["df_dict", "profile_markdown", "insights_markdown"],
+            keys_written=["visualization_result"],
+            summary=f"{n_ok}/{len(result.charts)} charts rendered successfully",
+            telemetry=telem,
+        )
+        return {
+            "visualization_result": serialised,
+            "graph_trace": _append_trace(state, entry),
+        }
     except Exception as exc:
-        return {"error": f"Visualizer failed: {exc}"}
+        msg = f"Visualizer failed: {exc}"
+        logger.exception(msg)
+        res_after = collect_resource_snapshot()
+        telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
+        entry = _trace_entry(
+            "visualizer",
+            status="failed",
+            started=t0,
+            keys_read=["df_dict", "profile_markdown", "insights_markdown"],
+            keys_written=[],
+            error=msg,
+            telemetry=telem,
+        )
+        return {"error": msg, "graph_trace": _append_trace(state, entry)}
+
+
+def reporter_node(state: PipelineState) -> PipelineState:
+    """Synthesize all prior outputs into an executive report.
+
+    Reads:  ``profile_markdown``, ``insights``, ``insights_markdown``, ``visualization_result``
+    Writes: ``report_markdown``
+    """
+    t0 = time.time()
+    profile_md = state.get("profile_markdown")
+    insights_md = state.get("insights_markdown")
+
+    if not profile_md and not insights_md:
+        entry = _trace_entry(
+            "reporter",
+            status="skipped",
+            started=t0,
+            keys_read=["profile_markdown", "insights_markdown"],
+            keys_written=[],
+            summary="Skipped — no profile or insights available",
+        )
+        return {"graph_trace": _append_trace(state, entry)}
+
+    res_before = collect_resource_snapshot()
+    try:
+        insights = state.get("insights")
+        viz_result = state.get("visualization_result")
+
+        agent = ReporterAgent()
+        llm_start = time.time()
+        result = agent.run(
+            profiler_output=profile_md or "",
+            analyst_output=insights_md or "",
+            insights=insights,
+            visualizer_output=viz_result,
+        )
+        llm_end = time.time()
+
+        report = result.get("reporter_output", "")
+
+        res_after = collect_resource_snapshot()
+        telem = build_telemetry(
+            task="text",
+            llm_start=llm_start,
+            llm_end=llm_end,
+            resource_before=res_before,
+            resource_after=res_after,
+        )
+        entry = _trace_entry(
+            "reporter",
+            status="success",
+            started=t0,
+            keys_read=[
+                "profile_markdown",
+                "insights",
+                "insights_markdown",
+                "visualization_result",
+            ],
+            keys_written=["report_markdown"],
+            summary=f"Report generated ({len(report)} chars)",
+            telemetry=telem,
+        )
+        return {
+            "report_markdown": report,
+            "graph_trace": _append_trace(state, entry),
+        }
+    except Exception as exc:
+        msg = f"Reporter failed: {exc}"
+        logger.exception(msg)
+        res_after = collect_resource_snapshot()
+        telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
+        entry = _trace_entry(
+            "reporter",
+            status="failed",
+            started=t0,
+            keys_read=[
+                "profile_markdown",
+                "insights",
+                "insights_markdown",
+                "visualization_result",
+            ],
+            keys_written=[],
+            error=msg,
+            telemetry=telem,
+        )
+        return {"error": msg, "graph_trace": _append_trace(state, entry)}
 
 
 # ---------------------------------------------------------------------------
@@ -126,19 +410,88 @@ def visualizer_node(state: PipelineState) -> PipelineState:
 # ---------------------------------------------------------------------------
 
 
-def build_graph() -> StateGraph:
+def _get_node_action(node_name: str):
+    """Helper to get the node function for a given node name."""
+    try:
+        match node_name:
+            case "profiler":
+                return profiler_node
+            case "analyst":
+                return analyst_node
+            case "visualizer":
+                return visualizer_node
+            case "reporter":
+                return reporter_node
+            case _:
+                raise ValueError(f"Unknown node name: {node_name}")
+    except Exception as exc:
+        msg = f"Error getting node action for {node_name}: {exc}"
+        logger.exception(msg)
+        return {"error": msg, "graph_trace": []}
+
+
+def build_graph():
     """Build and compile the AutoInsight-AI orchestration graph.
 
-    Returns:
-        A compiled LangGraph ``CompiledGraph`` ready for ``.invoke()``.
+    Returns a compiled LangGraph ``CompiledGraph`` ready for ``.invoke()``.
     """
     graph = StateGraph(PipelineState)
 
-    graph.add_node("profiler", profiler_node)
-    graph.add_node("visualizer", visualizer_node)
+    for node_name in _AGENTS_ORDER:
+        graph.add_node(node_name, _get_node_action(node_name))
 
-    graph.add_edge(START, "profiler")
-    graph.add_edge("profiler", "visualizer")
-    graph.add_edge("visualizer", END)
+    graph.add_edge(START, _AGENTS_ORDER[0])
+    for i in range(len(_AGENTS_ORDER) - 1):
+        graph.add_edge(_AGENTS_ORDER[i], _AGENTS_ORDER[i + 1])
+    graph.add_edge(_AGENTS_ORDER[-1], END)
 
     return graph.compile()
+
+
+# ---------------------------------------------------------------------------
+# High-level entry points
+# ---------------------------------------------------------------------------
+
+
+def run_analysis(df: pd.DataFrame, file_name: str = "dataset") -> PipelineState:
+    """Run the full analysis pipeline and return the final state.
+
+    This is the application-level entry point used by the Streamlit app
+    and any other caller that wants the complete orchestrated result.
+
+    Args:
+        df:        The uploaded dataset as a pandas DataFrame.
+        file_name: Original file name (for display / tracing).
+
+    Returns:
+        The terminal :class:`PipelineState` with all agent outputs and the
+        graph trace populated.
+    """
+    graph = build_graph()
+    initial_state: PipelineState = {
+        "df_dict": df.to_dict(orient="records"),
+        "file_name": file_name,
+        "graph_trace": [],
+    }
+    result: PipelineState = graph.invoke(initial_state)
+    return result
+
+
+def stream_analysis(
+    df: pd.DataFrame,
+    file_name: str = "dataset",
+) -> Iterator[tuple[str, PipelineState]]:
+    """Stream the analysis pipeline, yielding after each node completes.
+
+    Yields:
+        ``(node_name, cumulative_state)`` tuples — one per completed node.
+        The UI can render partial results as soon as each node finishes.
+    """
+    graph = build_graph()
+    initial_state: PipelineState = {
+        "df_dict": df.to_dict(orient="records"),
+        "file_name": file_name,
+        "graph_trace": [],
+    }
+    for chunk in graph.stream(initial_state, stream_mode="updates"):
+        yield from chunk.items()

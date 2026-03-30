@@ -224,7 +224,7 @@ def test_analyst_agent_with_llm():
     print("\n🤖 Running AnalystAgent...")
     print("   (15-60 seconds depending on your machine)\n")
 
-    agent = AnalystAgent(temperature=0.5)
+    agent = AnalystAgent(use_llm_categorization=False)
     result = agent.run(
         profiler_output=state["profiler_output"],
         sample_text=state["sample_text"],

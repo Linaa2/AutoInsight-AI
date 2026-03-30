@@ -18,6 +18,6 @@ repos:
       - id: check-yaml
       - id: check-added-large-files
         args: ["--maxkb=1024"]
-        exclude: "^uv\\.lock$"
+        exclude: "^(uv\\.lock|assets/)"
       - id: end-of-file-fixer
       - id: trailing-whitespace

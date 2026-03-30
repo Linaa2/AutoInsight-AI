@@ -27,19 +27,57 @@ def _extract_json_str(text: str) -> str | None:
 
     Strategy:
         1. Remove ```json ... ``` or ``` ... ``` fences.
-        2. Find the first ``{`` and the last ``}`` and return the substring.
+        2. If the response starts with ``[``, it is a bare chart array — wrap it
+           in ``{"charts": [...]}`` so the rest of the pipeline sees a uniform shape.
+        3. Otherwise, use balanced-bracket matching to extract the first top-level
+           ``{...}`` block (avoids the classic first-``{`` / last-``}`` bug that
+           produces "Extra data" when multiple JSON objects appear in the text).
 
     Returns:
         A candidate JSON string, or None if no ``{...}`` block was found.
     """
-    # Strip markdown code fences (```json or just ```)
-    text = re.sub(r"```(?:json)?\s*", "", text).strip()
+    # Strip all markdown code fences (```json, ```python, or plain ```)
+    text = re.sub(r"```[\w]*\s*", "", text)
+    text = re.sub(r"```", "", text).strip()
 
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end < start:
+    # If the LLM returned a bare array, wrap it so the parser sees {"charts": [...]}
+    stripped = text.lstrip()
+    if stripped.startswith("["):
+        arr_start = text.find("[")
+        arr_end = text.rfind("]")
+        if arr_start != -1 and arr_end > arr_start:
+            return f'{{"charts": {text[arr_start : arr_end + 1]}}}'
         return None
-    return text[start : end + 1]
+
+    # Use balanced-bracket matching to find the first complete {...} block.
+    # This avoids returning "obj1}, {obj2" when multiple objects live in the text.
+    obj_start = text.find("{")
+    if obj_start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i, ch in enumerate(text[obj_start:], start=obj_start):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[obj_start : i + 1]
+
+    return None
 
 
 def _validate_chart_spec(raw: object) -> tuple[ChartSpec | None, str]:

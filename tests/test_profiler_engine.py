@@ -112,7 +112,7 @@ class TestDataProfiler:
 
     def test_top_values_respects_env(self, sample_df):
         cp = DataProfiler(top_values=2).profile(sample_df).columns["department"]
-        assert len(cp.top_values) <= 2
+        assert len(cp.top_values or {}) <= 2
 
     # ------------------------------------------------------------------
     # Datetime column statistics
