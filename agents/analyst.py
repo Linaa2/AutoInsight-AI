@@ -45,7 +45,8 @@ def _load_prompts() -> dict:
     for path in candidates:
         if path.exists():
             with path.open(encoding="utf-8") as f:
-                return yaml.safe_load(f)
+                data: dict = yaml.safe_load(f)
+                return data
     raise FileNotFoundError(f"prompts.yaml not found. Searched: {[str(p) for p in candidates]}")
 
 
@@ -74,7 +75,8 @@ def extract_json(raw: str) -> dict | None:
             brace_count -= 1
             if brace_count == 0:
                 try:
-                    return json.loads(cleaned[start : i + 1])
+                    result: dict = json.loads(cleaned[start : i + 1])
+                    return result
                 except json.JSONDecodeError:
                     break
     return None
@@ -102,7 +104,7 @@ def fallback_parse_markdown(raw: str) -> list[dict]:
     when the LLM does not respect JSON format.
     """
     insights = []
-    current = {}
+    current: dict[str, str] = {}
 
     for line in raw.split("\n"):
         line = line.strip()
@@ -255,7 +257,7 @@ class InsightCategorizer:
         for category, keywords in self.CATEGORY_KEYWORDS.items():
             scores[category] = sum(1 for kw in keywords if kw in text)
 
-        best = max(scores, key=scores.get)
+        best = max(scores, key=lambda k: scores[k])
         return best if scores[best] > 0 else "general"
 
     def _categorize_with_llm(self, insight: dict) -> str:

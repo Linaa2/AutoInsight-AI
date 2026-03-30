@@ -22,9 +22,10 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Literal
 
-from langchain_community.chat_models import ChatOllama
+from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+
+load_dotenv()
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -94,6 +95,8 @@ class LLMClient:
     def _build(model: str) -> BaseChatModel:
         """Instantiate the LangChain chat model for the configured provider."""
         if _PROVIDER == "gemini":
+            from langchain_google_genai import ChatGoogleGenerativeAI
+
             # Gemini API does not natively support system messages;
             # convert_system_message_to_human merges them into the human turn.
             return ChatGoogleGenerativeAI(
@@ -101,10 +104,12 @@ class LLMClient:
                 convert_system_message_to_human=True,
             )
         # Ollama (default) — no device parameter; Ollama handles acceleration.
+        from langchain_ollama import ChatOllama
+
         return ChatOllama(
             model=model,
             base_url=_HOST,
-            timeout=_TIMEOUT,
+            client_kwargs={"timeout": _TIMEOUT},
         )
 
 
