@@ -7,7 +7,7 @@ import sys
 from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -47,23 +47,23 @@ class ModuleLogger:
     # Logging API — delegates to the underlying Logger
     # ------------------------------------------------------------------
 
-    def debug(self, msg: object, *args: object, **kwargs: object) -> None:
-        self._logger.debug(msg, *args, **kwargs)
+    def debug(self, msg: object, *args: object, **kwargs: Any) -> None:
+        self._logger.debug(msg, *args, **kwargs)  # type: ignore[arg-type]
 
-    def info(self, msg: object, *args: object, **kwargs: object) -> None:
-        self._logger.info(msg, *args, **kwargs)
+    def info(self, msg: object, *args: object, **kwargs: Any) -> None:
+        self._logger.info(msg, *args, **kwargs)  # type: ignore[arg-type]
 
-    def warning(self, msg: object, *args: object, **kwargs: object) -> None:
-        self._logger.warning(msg, *args, **kwargs)
+    def warning(self, msg: object, *args: object, **kwargs: Any) -> None:
+        self._logger.warning(msg, *args, **kwargs)  # type: ignore[arg-type]
 
-    def error(self, msg: object, *args: object, **kwargs: object) -> None:
-        self._logger.error(msg, *args, **kwargs)
+    def error(self, msg: object, *args: object, **kwargs: Any) -> None:
+        self._logger.error(msg, *args, **kwargs)  # type: ignore[arg-type]
 
-    def critical(self, msg: object, *args: object, **kwargs: object) -> None:
-        self._logger.critical(msg, *args, **kwargs)
+    def critical(self, msg: object, *args: object, **kwargs: Any) -> None:
+        self._logger.critical(msg, *args, **kwargs)  # type: ignore[arg-type]
 
-    def exception(self, msg: object, *args: object, **kwargs: object) -> None:
-        self._logger.exception(msg, *args, **kwargs)
+    def exception(self, msg: object, *args: object, **kwargs: Any) -> None:
+        self._logger.exception(msg, *args, **kwargs)  # type: ignore[arg-type]
 
     @property
     def name(self) -> str:
