@@ -5,12 +5,17 @@ distributions, and sample rows — all without any LLM involvement.
 """
 
 import os
+import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from utils.logger import get_module_logger
+
+logger = get_module_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -122,6 +127,8 @@ class DataProfiler:
     def profile(self, df: pd.DataFrame) -> DataProfile:
         """Compute a full profile for *df* and return a :class:`DataProfile`."""
         n_rows, n_cols = df.shape
+        logger.info("Profiling DataFrame — %d rows, %d cols", n_rows, n_cols)
+        t0 = time.perf_counter()
 
         duplicates_count = int(df.duplicated().sum())
         missing_per_col = df.isnull().sum()
@@ -152,7 +159,7 @@ class DataProfiler:
         # Ensure all keys are strings
         samples = [{str(k): v for k, v in row.items()} for row in samples]
 
-        return DataProfile(
+        result = DataProfile(
             shape=[n_rows, n_cols],
             duplicates_count=duplicates_count,
             duplicates_pct=round(duplicates_count / n_rows * 100, 2) if n_rows > 0 else 0.0,
@@ -171,6 +178,8 @@ class DataProfiler:
             samples=samples,
             created_at=datetime.now(UTC).isoformat(),
         )
+        logger.info("Profile complete in %.2f s", time.perf_counter() - t0)
+        return result
 
     # ------------------------------------------------------------------
     # Column-level profiling

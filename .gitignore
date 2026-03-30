@@ -35,7 +35,8 @@ chroma_db/
 
 # Logs
 *.log
-logs/
+logs/*
+!logs/.gitkeep
 
 # Temporary files
 tmp/

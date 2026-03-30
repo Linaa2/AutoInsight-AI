@@ -15,8 +15,11 @@ from dotenv import load_dotenv
 from agents.profiler import ProfilerAgent
 from tools.data_loader import DataLoader, UnsupportedFormatError
 from tools.profiler_engine import DataProfile, DataProfiler
+from utils.logger import get_module_logger
 
 load_dotenv()
+
+logger = get_module_logger(__name__, console=False)
 
 _APP_TITLE = os.getenv("APP_TITLE", "AutoInsight AI")
 _SAMPLE_ROWS = int(os.getenv("PROFILER_SAMPLE_ROWS", "5"))
@@ -58,20 +61,25 @@ def main() -> None:
         return
 
     # ---- Load ----
+    logger.info("File uploaded: '%s'", uploaded_file.name)
     loader = DataLoader()
     try:
         df = loader.load_from_upload(uploaded_file.read(), uploaded_file.name)
     except UnsupportedFormatError as exc:
+        logger.warning("Unsupported format for '%s': %s", uploaded_file.name, exc)
         st.error(str(exc))
         return
     except Exception as exc:
+        logger.error("Failed to load '%s': %s", uploaded_file.name, exc)
         st.error(f"Failed to load file: {exc}")
         return
+    logger.info("File loaded: %d rows x %d cols", df.shape[0], df.shape[1])
 
     # ---- Profile ----
     profiler = DataProfiler()
     with st.spinner("Computing profile…"):
         profile = profiler.profile(df)
+    logger.info("Profile computed for '%s'", uploaded_file.name)
 
     # Reset AI description when a different file is uploaded
     if st.session_state.get("last_file") != uploaded_file.name:
@@ -198,12 +206,15 @@ def _render_ai_analysis(profile: DataProfile, enable_ai: bool) -> None:
         return
 
     if st.button("🚀 Generate AI Analysis", type="primary"):
+        logger.info("AI analysis requested")
         agent = ProfilerAgent()
         with st.spinner("Generating AI analysis… this may take a moment."):
             try:
                 description = agent.describe(profile)
                 st.session_state["ai_description"] = description
+                logger.info("AI analysis complete (%d chars)", len(description))
             except Exception as exc:
+                logger.error("AI analysis failed: %s", exc)
                 st.error(f"AI analysis failed: {exc}")
                 st.info(
                     "Make sure Ollama is running locally, or set `LLM_PROVIDER=gemini` "

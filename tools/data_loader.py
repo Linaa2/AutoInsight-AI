@@ -7,6 +7,10 @@ from pathlib import Path
 
 import pandas as pd
 
+from utils.logger import get_module_logger
+
+logger = get_module_logger(__name__)
+
 
 class FileFormat(StrEnum):
     CSV = "csv"
@@ -51,10 +55,14 @@ class DataLoader:
             UnsupportedFormatError: If the file extension is not supported.
         """
         path = Path(file_path)
+        logger.debug("Loading file: '%s'", path)
         if not path.exists():
+            logger.warning("File not found: '%s'", path)
             raise FileNotFoundError(f"File not found: {file_path}")
         fmt = self._detect_format(path)
-        return self._dispatch(fmt, path)
+        df = self._dispatch(fmt, path)
+        logger.info("Loaded %d rows x %d cols from '%s'", df.shape[0], df.shape[1], path.name)
+        return df
 
     def load_from_upload(self, file_bytes: bytes, file_name: str) -> pd.DataFrame:
         """Load a DataFrame from raw bytes (e.g., a Streamlit file upload).
@@ -66,8 +74,11 @@ class DataLoader:
         Raises:
             UnsupportedFormatError: If the file extension is not supported.
         """
+        logger.info("Loading upload: '%s' (%d bytes)", file_name, len(file_bytes))
         fmt = self._detect_format(Path(file_name))
-        return self._dispatch(fmt, io.BytesIO(file_bytes))
+        df = self._dispatch(fmt, io.BytesIO(file_bytes))
+        logger.info("Loaded %d rows x %d cols from '%s'", df.shape[0], df.shape[1], file_name)
+        return df
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -76,6 +87,7 @@ class DataLoader:
     def _detect_format(self, path: Path) -> FileFormat:
         ext = path.suffix.lower()
         if ext not in SUPPORTED_EXTENSIONS:
+            logger.warning("Unsupported extension '%s' for file '%s'", ext, path.name)
             raise UnsupportedFormatError(
                 f"Unsupported file extension '{ext}'. "
                 f"Supported: {sorted(SUPPORTED_EXTENSIONS.keys())}"

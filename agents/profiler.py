@@ -11,6 +11,9 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from tools.profiler_engine import DataProfile
 from utils.llm import LLMClient
+from utils.logger import get_module_logger
+
+logger = get_module_logger(__name__)
 
 _DEFAULT_PROMPTS_PATH = Path(__file__).parent.parent / "config" / "prompts.yaml"
 
@@ -26,6 +29,7 @@ class ProfilerAgent:
     def __init__(self, llm_client: LLMClient | None = None) -> None:
         self._llm_client = llm_client or LLMClient()
         self._prompts = self._load_prompts()
+        logger.debug("ProfilerAgent initialised")
 
     def describe(self, profile: DataProfile) -> str:
         """Generate a structured markdown description for *profile*.
@@ -36,6 +40,7 @@ class ProfilerAgent:
         Returns:
             Markdown-formatted analysis string.
         """
+        logger.info("Generating LLM description for profile (%d cols)", len(profile.columns))
         profile_json = json.dumps(profile.to_dict(), indent=2, default=str)
 
         llm = self._llm_client.get_llm()
@@ -46,7 +51,9 @@ class ProfilerAgent:
             ]
         )
         chain = prompt | llm | StrOutputParser()
-        return chain.invoke({"profile_json": profile_json})
+        result = chain.invoke({"profile_json": profile_json})
+        logger.info("LLM description ready (%d chars)", len(result))
+        return result
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -54,6 +61,7 @@ class ProfilerAgent:
 
     def _load_prompts(self) -> dict[str, Any]:
         path = Path(os.getenv("PROMPTS_PATH", str(_DEFAULT_PROMPTS_PATH)))
+        logger.debug("Loading prompts from '%s'", path)
         with path.open(encoding="utf-8") as fh:
             data: dict[str, Any] = yaml.safe_load(fh)
         if "profiler" not in data:
