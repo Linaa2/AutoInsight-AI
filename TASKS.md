@@ -31,7 +31,7 @@ For everyone: **Ollama integration for local LLM testing**
         - sections: overview, data quality, column types, distributions, etc.
     - UI for uploading dataset and displaying profile, with focus on clarity and usability
 
-- **P2** (Analyst + UI + Test) - 29/03/2026 - Lina: 
+- **P2** (Analyst + UI + Test) - 29/03/2026 - Lina:
     - insight generation agent that takes profile as input and generates insights in markdown format
         - prompts should encourage the agent to provide actionable insights, not just descriptive statistics
         - define a set of insight categories (e.g., trends, anomalies, correlations) and ensure the agent covers them
@@ -56,7 +56,7 @@ For everyone: **Ollama integration for local LLM testing**
             - consider adding a feature for users to provide feedback on insights (e.g., thumbs up/down) to help improve future insight generation
             - ensure the UI can handle different screen sizes and that insights are displayed in a responsive manner
     - (optional) data validation layer: checks if insights are consistent with data (no hallucinations): encourage the agent to consider data quality issues when generating insights and to mention any limitations or uncertainties in the insights
-    
+
 - **P3** (Visualizer + UI + Test) - 29/03/2026 - Amine:
     - visualizer agent: generates chart specs (title, type, code) based on insights + profile
         - prompts should encourage the agent to generate charts that are relevant to the insights and that effectively communicate the underlying data patterns

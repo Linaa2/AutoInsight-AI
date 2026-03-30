@@ -51,7 +51,7 @@ class LLMClient:
 
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
-            raise EnvironmentError(
+            raise OSError(
                 "GOOGLE_API_KEY environment variable is required when LLM_PROVIDER=gemini"
             )
         return ChatGoogleGenerativeAI(

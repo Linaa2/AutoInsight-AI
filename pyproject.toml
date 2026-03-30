@@ -93,9 +93,6 @@ disallow_untyped_defs = false
 check_untyped_defs = true
 mypy_path = ["."]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["agents*", "app*", "config*", "evaluation*", "graph*", "tools*", "utils*"]
@@ -103,5 +100,3 @@ include = ["agents*", "app*", "config*", "evaluation*", "graph*", "tools*", "uti
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-
-

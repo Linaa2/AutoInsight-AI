@@ -3,7 +3,6 @@
 import json
 import os
 from pathlib import Path
-from typing import Optional
 
 import yaml
 from langchain_core.output_parsers import StrOutputParser
@@ -23,7 +22,7 @@ class ProfilerAgent:
                       Defaults to config/prompts.yaml relative to the project root.
     """
 
-    def __init__(self, llm_client: Optional[LLMClient] = None) -> None:
+    def __init__(self, llm_client: LLMClient | None = None) -> None:
         self._llm_client = llm_client or LLMClient()
         self._prompts = self._load_prompts()
 
@@ -39,10 +38,12 @@ class ProfilerAgent:
         profile_json = json.dumps(profile.to_dict(), indent=2, default=str)
 
         llm = self._llm_client.get_llm()
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", self._prompts["system"]),
-            ("human", self._prompts["human"]),
-        ])
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", self._prompts["system"]),
+                ("human", self._prompts["human"]),
+            ]
+        )
         chain = prompt | llm | StrOutputParser()
         return chain.invoke({"profile_json": profile_json})
 
@@ -52,7 +53,7 @@ class ProfilerAgent:
 
     def _load_prompts(self) -> dict:
         path = Path(os.getenv("PROMPTS_PATH", str(_DEFAULT_PROMPTS_PATH)))
-        with open(path, "r", encoding="utf-8") as fh:
+        with path.open(encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
         if "profiler" not in data:
             raise KeyError(f"'profiler' key not found in prompts file: {path}")
