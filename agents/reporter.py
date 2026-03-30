@@ -102,6 +102,7 @@ class ReporterAgent:
         analyst_output: str,
         insights: list[dict] | None = None,
         visualizer_output: dict | None = None,
+        rag_context: str = "",
     ) -> dict:
         """
         Generate the full analysis report.
@@ -111,6 +112,10 @@ class ReporterAgent:
             analyst_output: Analyst markdown output.
             insights: Structured insight dicts (optional, enriches context).
             visualizer_output: Visualizer output dict with chart metadata (optional).
+            rag_context: Optional context retrieved from ChromaDB (previous runs).
+                         If provided and non-empty, appended as a supplementary
+                         block so the LLM can reference prior analyses.
+                         Reporter always works without it.
 
         Returns:
             Dict with 'reporter_output' (str): the full markdown report.
@@ -126,6 +131,15 @@ class ReporterAgent:
                 insights_summary=insights_summary,
                 charts_summary=charts_summary,
             )
+
+            # Append prior-run context if available (lightweight, controlled injection)
+            if rag_context and rag_context.strip():
+                human_prompt += (
+                    "\n\n## 📚 Context from Previous Analyses\n"
+                    "The following is relevant context retrieved from a previous run "
+                    "on this dataset. Use it only if it adds value to the current report.\n\n"
+                    + rag_context.strip()
+                )
 
             raw = call_llm_with_messages(system=system_prompt, human=human_prompt)
 

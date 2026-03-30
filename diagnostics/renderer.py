@@ -9,7 +9,8 @@ Sections rendered (in order):
 2. **Aggregated Metrics Summary** — KPIs across all nodes.
 3. **Per-Agent Detail Cards** — one expander per unique node, each containing
    timing, model info, token usage, resource consumption, and status.
-4. **Download** — full trace as JSON.
+4. **Memory & RAG** — ChromaDB storage events for this pipeline run.
+5. **Download** — full trace as JSON.
 """
 
 from __future__ import annotations
@@ -34,9 +35,10 @@ _AGENT_META: dict[str, dict[str, str]] = {
     "analyst": {"icon": "💡", "label": "Analyst"},
     "visualizer": {"icon": "📈", "label": "Visualizer"},
     "reporter": {"icon": "📄", "label": "Reporter"},
+    "rag_storage": {"icon": "🧠", "label": "RAG Storage"},
 }
 
-_NODE_ORDER = ["profiler", "analyst", "visualizer", "reporter"]
+_NODE_ORDER = ["profiler", "analyst", "visualizer", "reporter", "rag_storage"]
 
 # React Flow node colours per status
 _STATUS_STYLE: dict[str, dict[str, str]] = {
@@ -461,6 +463,77 @@ def _render_node_card(entry: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Memory / RAG section
+# ---------------------------------------------------------------------------
+
+_MEM_EVENT_ICON: dict[str, str] = {
+    "store_profile": "📊",
+    "store_insights": "💡",
+    "store_report": "📄",
+    "retrieve_context": "🔍",
+}
+_MEM_STATUS_STYLE: dict[str, str] = {
+    "success": "background:#d1fae5;color:#065f46;border:1px solid #059669;",
+    "failed": "background:#fee2e2;color:#991b1b;border:1px solid #dc2626;",
+    "skipped": "background:#fef3c7;color:#92400e;border:1px solid #d97706;",
+    "empty": "background:#f1f5f9;color:#475569;border:1px solid #94a3b8;",
+}
+
+
+def _render_memory_section(
+    dataset_id: str | None,
+    rag_stored: bool,
+    rag_summary: str | None,
+    memory_trace: list[dict[str, Any]],
+) -> None:
+    """Render the ChromaDB memory section in the diagnostics tab."""
+    st.markdown("### 🧠 Memory & RAG")
+
+    # Header row: dataset_id + overall stored status
+    h1, h2 = st.columns([3, 1])
+    with h1:
+        if dataset_id:
+            st.caption(f"**Dataset ID:** `{dataset_id}`")
+        else:
+            st.caption("**Dataset ID:** —")
+    with h2:
+        if rag_stored:
+            st.success("✅ Stored")
+        else:
+            st.info("⬜ Not stored")
+
+    if rag_summary:
+        st.caption(rag_summary)
+
+    if not memory_trace:
+        st.caption("No memory events recorded for this run.")
+        return
+
+    # Render each memory event as a compact pill row
+    for evt in memory_trace:
+        event_key = evt.get("event", "unknown")
+        status = evt.get("status", "unknown")
+        icon = _MEM_EVENT_ICON.get(event_key, "📦")
+        style = _MEM_STATUS_STYLE.get(status, "")
+        chunks = evt.get("chunks", 0)
+        message = evt.get("message", "")
+        collection = evt.get("collection", "")
+
+        label = event_key.replace("_", " ").capitalize()
+        chunks_str = f" · {chunks} chunks" if chunks else ""
+        col_str = f" → `{collection}`" if collection else ""
+
+        st.markdown(
+            f'<div style="padding:6px 12px;border-radius:8px;margin:3px 0;'
+            f'font-family:sans-serif;font-size:13px;{style}">'
+            f"<b>{icon} {label}</b>{col_str}{chunks_str}"
+            + (f"<br><span style='font-size:11px;opacity:0.8;'>{message}</span>" if message else "")
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -498,12 +571,27 @@ def render_diagnostics_tab(result: dict[str, Any], key_suffix: str = "") -> None
         if node not in _NODE_ORDER:
             _render_node_card(entry)
 
-    # 3️⃣ Global error
+    # 3️⃣ Memory / RAG section
+    memory_trace: list[dict[str, Any]] = result.get("memory_trace") or []
+    dataset_id: str | None = result.get("dataset_id")
+    rag_stored: bool = bool(result.get("rag_stored"))
+    rag_summary: str | None = result.get("rag_summary")
+
+    if dataset_id or memory_trace:
+        st.divider()
+        _render_memory_section(
+            dataset_id=dataset_id,
+            rag_stored=rag_stored,
+            rag_summary=rag_summary,
+            memory_trace=memory_trace,
+        )
+
+    # 4️⃣ Global error
     global_error = result.get("error")
     if global_error:
         st.error(f"🚨 Pipeline error: {global_error}")
 
-    # 4️⃣ Download full trace
+    # 5️⃣ Download full trace
     st.divider()
     st.download_button(
         label="⬇️ Download Full Trace (.json)",

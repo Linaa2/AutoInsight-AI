@@ -303,13 +303,3 @@ class RAGAgent:
             truncated = truncated[: last_period + 1]
 
         return truncated + "\n\n[... context truncated]"
-        if len(text) <= self.MAX_CONTEXT_LENGTH:
-            return text
-
-        truncated = text[: self.MAX_CONTEXT_LENGTH]
-        # Cut at last complete sentence
-        last_period = truncated.rfind(".")
-        if last_period > self.MAX_CONTEXT_LENGTH // 2:
-            truncated = truncated[: last_period + 1]
-
-        return truncated + "\n\n[... context truncated]"

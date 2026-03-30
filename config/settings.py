@@ -80,6 +80,12 @@ class Settings:
     PROFILER_SAMPLE_ROWS: int = field(default_factory=lambda: _env_int("PROFILER_SAMPLE_ROWS", 5))
     PROFILER_TOP_VALUES: int = field(default_factory=lambda: _env_int("PROFILER_TOP_VALUES", 10))
 
+    # -- Embeddings / ChromaDB --
+    OLLAMA_EMBED_MODEL: str = field(
+        default_factory=lambda: _env("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+    )
+    CHROMA_DIR: str = field(default_factory=lambda: _env("CHROMA_DIR", "./chroma_db"))
+
     # -- Data loader --
     DATA_LOADER_EXCEL_SHEET: str = field(
         default_factory=lambda: _env("DATA_LOADER_EXCEL_SHEET", "0")

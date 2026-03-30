@@ -42,7 +42,7 @@ from diagnostics.telemetry import (
     build_telemetry_no_llm,
     collect_resource_snapshot,
 )
-from orchestration.state import NodeTraceEntry, PipelineState
+from orchestration.state import MemoryTraceEntry, NodeTraceEntry, PipelineState
 from tools.profiler_engine import DataProfiler
 from visualization.schemas import VisualizerRequest
 
@@ -352,6 +352,7 @@ def reporter_node(state: PipelineState) -> PipelineState:
             analyst_output=insights_md or "",
             insights=insights,
             visualizer_output=viz_result,
+            rag_context=state.get("rag_analysis_context") or "",
         )
         llm_end = time.time()
 
@@ -374,6 +375,7 @@ def reporter_node(state: PipelineState) -> PipelineState:
                 "insights",
                 "insights_markdown",
                 "visualization_result",
+                "rag_analysis_context",
             ],
             keys_written=["report_markdown"],
             summary=f"Report generated ({len(report)} chars)",
@@ -406,6 +408,191 @@ def reporter_node(state: PipelineState) -> PipelineState:
 
 
 # ---------------------------------------------------------------------------
+# RAG storage node
+# ---------------------------------------------------------------------------
+
+
+def rag_storage_node(state: PipelineState) -> PipelineState:
+    """Persist analysis outputs to ChromaDB after the main pipeline completes.
+
+    This is a *best-effort* node — it must never crash the analysis flow.
+    Failures are recorded in ``memory_trace`` and ``graph_trace`` but do NOT
+    propagate to the pipeline's ``error`` field.
+
+    Reads:  ``dataset_id``, ``profile_markdown``, ``insights``,
+            ``insights_markdown``, ``report_markdown``
+    Writes: ``rag_stored``, ``rag_summary``, ``memory_trace``
+    """
+    t0 = time.time()
+    res_before = collect_resource_snapshot()
+    dataset_id = state.get("dataset_id", "default")
+
+    profile_md = state.get("profile_markdown", "")
+    insights: list[dict[str, Any]] = state.get("insights") or []
+    insights_md = state.get("insights_markdown", "")
+    report_md = state.get("report_markdown", "")
+
+    # Nothing to store
+    if not any([profile_md, insights, insights_md, report_md]):
+        entry = _trace_entry(
+            "rag_storage",
+            status="skipped",
+            started=t0,
+            keys_read=["profile_markdown", "insights", "insights_markdown", "report_markdown"],
+            keys_written=[],
+            summary="Skipped — no analysis outputs to store",
+        )
+        return {
+            "rag_stored": False,
+            "rag_summary": "Nothing to store — pipeline produced no outputs.",
+            "memory_trace": [],
+            "graph_trace": _append_trace(state, entry),
+        }
+
+    memory_trace: list[MemoryTraceEntry] = []
+    stored_artifacts: list[str] = []
+    total_chunks = 0
+
+    try:
+        from agents.rag import RAGAgent
+
+        rag = RAGAgent(dataset_id=dataset_id)
+
+        if profile_md:
+            try:
+                rag.save_analysis(profile_text=profile_md)
+                memory_trace.append(
+                    MemoryTraceEntry(
+                        event="store_profile",
+                        status="success",
+                        dataset_id=dataset_id,
+                        collection="profiles",
+                        chunks=0,  # exact count not critical here
+                        message="Profile markdown stored",
+                    )
+                )
+                stored_artifacts.append("profile")
+            except Exception as exc:
+                logger.warning(f"RAG: failed to store profile: {exc}")
+                memory_trace.append(
+                    MemoryTraceEntry(
+                        event="store_profile",
+                        status="failed",
+                        dataset_id=dataset_id,
+                        collection="profiles",
+                        chunks=0,
+                        message=str(exc),
+                    )
+                )
+
+        insights_payload: list[dict[str, Any]] | str = insights if insights else insights_md
+        if insights_payload:
+            try:
+                count = rag.store.store_insights(insights_payload, dataset_id=dataset_id)
+                total_chunks += count
+                memory_trace.append(
+                    MemoryTraceEntry(
+                        event="store_insights",
+                        status="success",
+                        dataset_id=dataset_id,
+                        collection="insights",
+                        chunks=count,
+                        message=f"Stored {len(insights)} structured insights"
+                        if insights
+                        else "Stored insights markdown",
+                    )
+                )
+                stored_artifacts.append("insights")
+            except Exception as exc:
+                logger.warning(f"RAG: failed to store insights: {exc}")
+                memory_trace.append(
+                    MemoryTraceEntry(
+                        event="store_insights",
+                        status="failed",
+                        dataset_id=dataset_id,
+                        collection="insights",
+                        chunks=0,
+                        message=str(exc),
+                    )
+                )
+
+        if report_md:
+            try:
+                count = rag.store.store_report(report_md, dataset_id=dataset_id)
+                total_chunks += count
+                memory_trace.append(
+                    MemoryTraceEntry(
+                        event="store_report",
+                        status="success",
+                        dataset_id=dataset_id,
+                        collection="reports",
+                        chunks=count,
+                        message="Report markdown stored",
+                    )
+                )
+                stored_artifacts.append("report")
+            except Exception as exc:
+                logger.warning(f"RAG: failed to store report: {exc}")
+                memory_trace.append(
+                    MemoryTraceEntry(
+                        event="store_report",
+                        status="failed",
+                        dataset_id=dataset_id,
+                        collection="reports",
+                        chunks=0,
+                        message=str(exc),
+                    )
+                )
+
+        rag_stored = bool(stored_artifacts)
+        rag_summary = (
+            f"Stored {', '.join(stored_artifacts)} ({total_chunks} chunks) "
+            f"for dataset '{dataset_id}'"
+            if rag_stored
+            else f"Nothing stored for dataset '{dataset_id}'"
+        )
+
+        res_after = collect_resource_snapshot()
+        telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
+        entry = _trace_entry(
+            "rag_storage",
+            status="success" if rag_stored else "skipped",
+            started=t0,
+            keys_read=["profile_markdown", "insights", "insights_markdown", "report_markdown"],
+            keys_written=["rag_stored", "rag_summary", "memory_trace"],
+            summary=rag_summary,
+            telemetry=telem,
+        )
+        return {
+            "rag_stored": rag_stored,
+            "rag_summary": rag_summary,
+            "memory_trace": memory_trace,
+            "graph_trace": _append_trace(state, entry),
+        }
+
+    except Exception as exc:
+        msg = f"RAG storage failed: {exc}"
+        logger.warning(msg)
+        res_after = collect_resource_snapshot()
+        telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
+        entry = _trace_entry(
+            "rag_storage",
+            status="failed",
+            started=t0,
+            keys_read=["profile_markdown", "insights", "insights_markdown", "report_markdown"],
+            keys_written=[],
+            summary=msg,
+            telemetry=telem,
+        )
+        return {
+            "rag_stored": False,
+            "rag_summary": msg,
+            "memory_trace": memory_trace,
+            "graph_trace": _append_trace(state, entry),
+        }
+
+
+# ---------------------------------------------------------------------------
 # Graph builder
 # ---------------------------------------------------------------------------
 
@@ -422,6 +609,8 @@ def _get_node_action(node_name: str):
                 return visualizer_node
             case "reporter":
                 return reporter_node
+            case "rag_storage":
+                return rag_storage_node
             case _:
                 raise ValueError(f"Unknown node name: {node_name}")
     except Exception as exc:
@@ -433,17 +622,27 @@ def _get_node_action(node_name: str):
 def build_graph():
     """Build and compile the AutoInsight-AI orchestration graph.
 
+    Graph flow::
+
+        START → profiler → analyst → visualizer → reporter → rag_storage → END
+
     Returns a compiled LangGraph ``CompiledGraph`` ready for ``.invoke()``.
     """
     graph = StateGraph(PipelineState)
 
+    # Main analysis nodes
     for node_name in _AGENTS_ORDER:
         graph.add_node(node_name, _get_node_action(node_name))
 
+    # RAG storage node — runs after reporter, best-effort
+    graph.add_node("rag_storage", rag_storage_node)
+
+    # Wire edges: START → profiler → analyst → visualizer → reporter → rag_storage → END
     graph.add_edge(START, _AGENTS_ORDER[0])
     for i in range(len(_AGENTS_ORDER) - 1):
         graph.add_edge(_AGENTS_ORDER[i], _AGENTS_ORDER[i + 1])
-    graph.add_edge(_AGENTS_ORDER[-1], END)
+    graph.add_edge(_AGENTS_ORDER[-1], "rag_storage")
+    graph.add_edge("rag_storage", END)
 
     return graph.compile()
 
@@ -453,26 +652,64 @@ def build_graph():
 # ---------------------------------------------------------------------------
 
 
-def run_analysis(df: pd.DataFrame, file_name: str = "dataset") -> PipelineState:
+def _make_initial_state(
+    df: pd.DataFrame,
+    file_name: str,
+    dataset_id: str | None = None,
+) -> PipelineState:
+    """Build the initial :class:`PipelineState` for a graph invocation.
+
+    Computes ``dataset_id`` from the file name if not provided.
+    Attempts a best-effort pre-load of prior RAG context so the reporter
+    can optionally enrich its output with context from previous runs.
+    """
+    from utils.memory import ContextStore
+
+    if not dataset_id:
+        dataset_id = ContextStore.make_dataset_id(file_name)
+
+    # Best-effort: retrieve prior analysis context for reporter enrichment
+    rag_analysis_context = ""
+    try:
+        from agents.rag import RAGAgent
+
+        rag = RAGAgent(dataset_id=dataset_id)
+        rag_analysis_context = rag.get_analysis_context() or ""
+        if rag_analysis_context:
+            logger.info(f"Pre-loaded RAG context for dataset '{dataset_id}'")
+    except Exception as exc:
+        logger.debug(f"RAG pre-load skipped: {exc}")
+
+    return PipelineState(
+        df_dict=df.to_dict(orient="records"),
+        file_name=file_name,
+        dataset_id=dataset_id,
+        rag_analysis_context=rag_analysis_context,
+        graph_trace=[],
+    )
+
+
+def run_analysis(
+    df: pd.DataFrame,
+    file_name: str = "dataset",
+    dataset_id: str | None = None,
+) -> PipelineState:
     """Run the full analysis pipeline and return the final state.
 
     This is the application-level entry point used by the Streamlit app
     and any other caller that wants the complete orchestrated result.
 
     Args:
-        df:        The uploaded dataset as a pandas DataFrame.
-        file_name: Original file name (for display / tracing).
+        df:         The uploaded dataset as a pandas DataFrame.
+        file_name:  Original file name (for display / tracing).
+        dataset_id: Stable identifier for the dataset (auto-derived if omitted).
 
     Returns:
         The terminal :class:`PipelineState` with all agent outputs and the
         graph trace populated.
     """
     graph = build_graph()
-    initial_state: PipelineState = {
-        "df_dict": df.to_dict(orient="records"),
-        "file_name": file_name,
-        "graph_trace": [],
-    }
+    initial_state = _make_initial_state(df, file_name, dataset_id)
     result: PipelineState = graph.invoke(initial_state)
     return result
 
@@ -480,18 +717,20 @@ def run_analysis(df: pd.DataFrame, file_name: str = "dataset") -> PipelineState:
 def stream_analysis(
     df: pd.DataFrame,
     file_name: str = "dataset",
+    dataset_id: str | None = None,
 ) -> Iterator[tuple[str, PipelineState]]:
     """Stream the analysis pipeline, yielding after each node completes.
 
     Yields:
         ``(node_name, cumulative_state)`` tuples — one per completed node.
         The UI can render partial results as soon as each node finishes.
+
+    Args:
+        df:         The uploaded dataset as a pandas DataFrame.
+        file_name:  Original file name (for display / tracing).
+        dataset_id: Stable identifier for the dataset (auto-derived if omitted).
     """
     graph = build_graph()
-    initial_state: PipelineState = {
-        "df_dict": df.to_dict(orient="records"),
-        "file_name": file_name,
-        "graph_trace": [],
-    }
+    initial_state = _make_initial_state(df, file_name, dataset_id)
     for chunk in graph.stream(initial_state, stream_mode="updates"):
         yield from chunk.items()

@@ -35,6 +35,17 @@ class NodeTraceEntry(TypedDict, total=False):
     telemetry: dict[str, Any]  # NodeTelemetry from diagnostics.telemetry
 
 
+class MemoryTraceEntry(TypedDict, total=False):
+    """Record of a single ChromaDB memory interaction."""
+
+    event: str  # "store_profile" | "store_insights" | "store_report" | "retrieve_context"
+    status: str  # "success" | "skipped" | "empty" | "failed"
+    dataset_id: str
+    collection: str | None
+    chunks: int  # number of chunks stored / retrieved
+    message: str
+
+
 class PipelineState(TypedDict, total=False):
     """Shared state flowing through the LangGraph pipeline.
 
@@ -45,6 +56,7 @@ class PipelineState(TypedDict, total=False):
     # ---- inputs (set before graph invocation) ----
     df_dict: list[dict[str, Any]]
     file_name: str
+    dataset_id: str  # stable identifier derived from file_name via ContextStore.make_dataset_id
 
     # ---- profiler outputs ----
     profile_data: dict[str, Any]
@@ -59,6 +71,12 @@ class PipelineState(TypedDict, total=False):
 
     # ---- reporter outputs ----
     report_markdown: str
+
+    # ---- RAG / memory fields ----
+    rag_analysis_context: str  # retrieved context injected into reporter (from previous runs)
+    rag_stored: bool  # True when rag_storage_node ran successfully
+    rag_summary: str  # human-readable summary of what was stored
+    memory_trace: list[MemoryTraceEntry]  # one entry per memory interaction
 
     # ---- critic / self-correction (future) ----
     feedback: str
