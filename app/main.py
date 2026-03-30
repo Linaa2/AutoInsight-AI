@@ -424,30 +424,30 @@ def _render_evaluation(profile: DataProfile, enable_ai: bool) -> None:
 
     if st.button("🔍 Run Evaluation", type="primary", key="btn_eval"):
         agent = EvaluationAgent()
-        pipeline_eval = PipelineEvaluation()
+        _new_eval = PipelineEvaluation()
 
         with st.spinner("Evaluating pipeline outputs… this may take a moment."):
             if profiler_output:
                 try:
-                    pipeline_eval.profiler_eval = agent.evaluate_profiler(profiler_output, profile)
+                    _new_eval.profiler_eval = agent.evaluate_profiler(profiler_output, profile)
                 except Exception as exc:
                     st.error(f"Profiler evaluation failed: {exc}")
 
             if analyst_insights:
                 try:
-                    pipeline_eval.analyst_eval = agent.evaluate_analyst(analyst_insights, profile)
+                    _new_eval.analyst_eval = agent.evaluate_analyst(analyst_insights, profile)
                 except Exception as exc:
                     st.error(f"Analyst evaluation failed: {exc}")
 
             if reporter_output and analyst_markdown:
                 try:
-                    pipeline_eval.reporter_eval = agent.evaluate_reporter(
+                    _new_eval.reporter_eval = agent.evaluate_reporter(
                         reporter_output, analyst_markdown
                     )
                 except Exception as exc:
                     st.error(f"Reporter evaluation failed: {exc}")
 
-        st.session_state["pipeline_eval"] = pipeline_eval
+        st.session_state["pipeline_eval"] = _new_eval
 
     pipeline_eval: PipelineEvaluation | None = st.session_state.get("pipeline_eval")
 

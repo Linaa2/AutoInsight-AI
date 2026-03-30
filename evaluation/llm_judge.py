@@ -164,7 +164,7 @@ def _truncate_insights_json(json_str: str) -> str:
 
 def build_judge_system_prompt(rubric: list[dict]) -> str:
     """Return the judge system prompt with criteria names embedded."""
-    base = _PROMPTS["evaluation"]["judge"]["system"]
+    base: str = str(_PROMPTS["evaluation"]["judge"]["system"])
     criteria_names = ", ".join(c["name"] for c in rubric)
     return f"{base.rstrip()}\n\nExpected criteria keys: {criteria_names}"
 
@@ -184,14 +184,14 @@ def build_judge_human_prompt(
     validation_json = json.dumps(validation_report, indent=2, default=str)
 
     if artifact_type == "analyst":
-        template = _PROMPTS["evaluation"]["judge"]["analyst_human"]
+        template: str = str(_PROMPTS["evaluation"]["judge"]["analyst_human"])
         return template.format(
             rubric_json=rubric_json,
             validation_report_json=validation_json,
             artifact=artifact,
         )
 
-    template = _PROMPTS["evaluation"]["judge"]["human"]
+    template = str(_PROMPTS["evaluation"]["judge"]["human"])
     return template.format(
         artifact_type=artifact_type,
         rubric_json=rubric_json,
@@ -289,19 +289,17 @@ def parse_judge_response(raw: str, artifact_type: str) -> EvaluationResult:
     raw_suggestions = data.get("suggestions", [])
     suggestions = [str(s) for s in raw_suggestions] if isinstance(raw_suggestions, list) else []
 
-    base_kwargs = {
-        "artifact_type": artifact_type,
-        "overall_score": overall_score,
-        "grade": EvaluationResult.compute_grade(overall_score),
-        "criteria": criteria,
-        "critique": critique,
-        "suggestions": suggestions,
-        "judge_model": EVAL_JUDGE_MODEL,
-        "timestamp": make_timestamp(),
-    }
-
     if artifact_type != "analyst":
-        return EvaluationResult(**base_kwargs)
+        return EvaluationResult(
+            artifact_type=artifact_type,
+            overall_score=overall_score,
+            grade=EvaluationResult.compute_grade(overall_score),
+            criteria=criteria,
+            critique=critique,
+            suggestions=suggestions,
+            judge_model=EVAL_JUDGE_MODEL,
+            timestamp=make_timestamp(),
+        )
 
     raw_per_insight = data.get("per_insight", [])
     per_insight: list[InsightScore] = []
@@ -320,7 +318,17 @@ def parse_judge_response(raw: str, artifact_type: str) -> EvaluationResult:
                 )
             )
 
-    return AnalystEvaluationResult(**base_kwargs, per_insight=per_insight)
+    return AnalystEvaluationResult(
+        artifact_type=artifact_type,
+        overall_score=overall_score,
+        grade=EvaluationResult.compute_grade(overall_score),
+        criteria=criteria,
+        critique=critique,
+        suggestions=suggestions,
+        judge_model=EVAL_JUDGE_MODEL,
+        timestamp=make_timestamp(),
+        per_insight=per_insight,
+    )
 
 
 # ---------------------------------------------------------------------------
