@@ -44,9 +44,9 @@ def test_execute_bar_chart_success(sample_df: pd.DataFrame) -> None:
     code = "fig = px.bar(df, x='region', y='sales', title='Sales by Region')"
     result = execute_chart(sample_df, code)
 
-    assert result["success"] is True
-    assert result["figure"] is not None
-    assert result["error"] is None
+    assert result.success is True
+    assert result.figure is not None
+    assert result.error is None
 
 
 def test_execute_scatter_chart_success(sample_df: pd.DataFrame) -> None:
@@ -54,8 +54,8 @@ def test_execute_scatter_chart_success(sample_df: pd.DataFrame) -> None:
     code = "fig = px.scatter(df, x='units', y='sales', title='Units vs Sales')"
     result = execute_chart(sample_df, code)
 
-    assert result["success"] is True
-    assert result["figure"] is not None
+    assert result.success is True
+    assert result.figure is not None
 
 
 def test_execute_histogram_success(sample_df: pd.DataFrame) -> None:
@@ -63,8 +63,8 @@ def test_execute_histogram_success(sample_df: pd.DataFrame) -> None:
     code = "fig = px.histogram(df, x='sales', title='Sales Distribution')"
     result = execute_chart(sample_df, code)
 
-    assert result["success"] is True
-    assert result["figure"] is not None
+    assert result.success is True
+    assert result.figure is not None
 
 
 def test_execute_graph_objects_bar_success(sample_df: pd.DataFrame) -> None:
@@ -72,8 +72,8 @@ def test_execute_graph_objects_bar_success(sample_df: pd.DataFrame) -> None:
     code = "fig = go.Figure(data=[go.Bar(x=df['region'], y=df['sales'])])"
     result = execute_chart(sample_df, code)
 
-    assert result["success"] is True
-    assert result["figure"] is not None
+    assert result.success is True
+    assert result.figure is not None
 
 
 def test_execute_line_chart_success(sample_df: pd.DataFrame) -> None:
@@ -81,7 +81,7 @@ def test_execute_line_chart_success(sample_df: pd.DataFrame) -> None:
     code = "fig = px.line(df, x='month', y='sales', title='Sales Over Time')"
     result = execute_chart(sample_df, code)
 
-    assert result["success"] is True
+    assert result.success is True
 
 
 def test_execute_box_chart_success(sample_df: pd.DataFrame) -> None:
@@ -89,7 +89,7 @@ def test_execute_box_chart_success(sample_df: pd.DataFrame) -> None:
     code = "fig = px.box(df, y='sales', title='Sales Box Plot')"
     result = execute_chart(sample_df, code)
 
-    assert result["success"] is True
+    assert result.success is True
 
 
 # ---------------------------------------------------------------------------
@@ -102,10 +102,10 @@ def test_execute_syntax_error_returns_failure(sample_df: pd.DataFrame) -> None:
     code = "fig = px.bar(df, x='region', y='sales'"  # missing closing paren
     result = execute_chart(sample_df, code)
 
-    assert result["success"] is False
-    assert result["figure"] is None
-    assert result["error"] is not None
-    assert len(result["error"]) > 0
+    assert result.success is False
+    assert result.figure is None
+    assert result.error is not None
+    assert len(result.error) > 0
 
 
 def test_execute_nonexistent_column_returns_failure(sample_df: pd.DataFrame) -> None:
@@ -113,9 +113,9 @@ def test_execute_nonexistent_column_returns_failure(sample_df: pd.DataFrame) -> 
     code = "fig = px.bar(df, x='nonexistent_column', y='sales')"
     result = execute_chart(sample_df, code)
 
-    assert result["success"] is False
-    assert result["figure"] is None
-    assert result["error"] is not None
+    assert result.success is False
+    assert result.figure is None
+    assert result.error is not None
 
 
 def test_execute_no_fig_assigned_returns_failure(sample_df: pd.DataFrame) -> None:
@@ -123,18 +123,18 @@ def test_execute_no_fig_assigned_returns_failure(sample_df: pd.DataFrame) -> Non
     code = "chart = px.bar(df, x='region', y='sales')"  # 'chart' not 'fig'
     result = execute_chart(sample_df, code)
 
-    assert result["success"] is False
-    assert result["figure"] is None
-    assert result["error"] is not None
-    assert "fig" in result["error"].lower()
+    assert result.success is False
+    assert result.figure is None
+    assert result.error is not None
+    assert "fig" in result.error.lower()
 
 
 def test_execute_empty_code_returns_failure(sample_df: pd.DataFrame) -> None:
     """Empty code string produces a clean failure (no fig assigned)."""
     result = execute_chart(sample_df, "")
 
-    assert result["success"] is False
-    assert result["figure"] is None
+    assert result.success is False
+    assert result.figure is None
 
 
 def test_execute_import_attempt_fails_gracefully(sample_df: pd.DataFrame) -> None:
@@ -147,8 +147,8 @@ def test_execute_import_attempt_fails_gracefully(sample_df: pd.DataFrame) -> Non
     result = execute_chart(sample_df, code)
 
     # The import should fail since __builtins__ is empty
-    assert result["success"] is False
-    assert result["error"] is not None
+    assert result.success is False
+    assert result.error is not None
 
 
 def test_execute_result_figure_is_plotly_object(sample_df: pd.DataFrame) -> None:
@@ -158,8 +158,8 @@ def test_execute_result_figure_is_plotly_object(sample_df: pd.DataFrame) -> None
     code = "fig = px.bar(df, x='region', y='sales')"
     result = execute_chart(sample_df, code)
 
-    assert result["success"] is True
-    assert isinstance(result["figure"], go.Figure)
+    assert result.success is True
+    assert isinstance(result.figure, go.Figure)
 
 
 # ---------------------------------------------------------------------------

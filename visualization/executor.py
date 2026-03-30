@@ -18,18 +18,15 @@ If it does not, execution is considered a failure.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-if TYPE_CHECKING:
-    from visualization.schemas import ExecutionResult
+from visualization.schemas import ChartExecutionResult
 
 
-def execute_chart(df: pd.DataFrame, code: str) -> ExecutionResult:
+def execute_chart(df: pd.DataFrame, code: str) -> ChartExecutionResult:
     """Execute *code* against *df* in a restricted namespace.
 
     Args:
@@ -38,7 +35,7 @@ def execute_chart(df: pd.DataFrame, code: str) -> ExecutionResult:
               Example: ``"fig = px.bar(df, x='region', y='sales')"``
 
     Returns:
-        An :class:`~visualization.schemas.ExecutionResult` dict with:
+        A :class:`~visualization.schemas.ChartExecutionResult` with:
             - ``success``: True when the code ran and produced a ``fig``.
             - ``figure``:  The Plotly Figure object, or None on failure.
             - ``error``:   A human-readable error string on failure, else None.
@@ -58,18 +55,18 @@ def execute_chart(df: pd.DataFrame, code: str) -> ExecutionResult:
     try:
         exec(code, namespace)
     except Exception as exc:
-        return {
-            "success": False,
-            "figure": None,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
+        return ChartExecutionResult(
+            success=False,
+            figure=None,
+            error=f"{type(exc).__name__}: {exc}",
+        )
 
     fig = namespace.get("fig")
     if fig is None:
-        return {
-            "success": False,
-            "figure": None,
-            "error": "Code did not assign a Plotly figure to the variable 'fig'.",
-        }
+        return ChartExecutionResult(
+            success=False,
+            figure=None,
+            error="Code did not assign a Plotly figure to the variable 'fig'.",
+        )
 
-    return {"success": True, "figure": fig, "error": None}
+    return ChartExecutionResult(success=True, figure=fig, error=None)
