@@ -47,9 +47,9 @@ def test_parse_valid_json_returns_specs() -> None:
 
     assert error is None
     assert len(charts) == 1
-    assert charts[0]["title"] == "Sales by Region"
-    assert charts[0]["chart_type"] == "bar"
-    assert "code" in charts[0]
+    assert charts[0].title == "Sales by Region"
+    assert charts[0].chart_type == "bar"
+    assert charts[0].code
 
 
 def test_parse_valid_json_with_markdown_fences() -> None:
@@ -76,8 +76,8 @@ def test_parse_optional_fields_are_passed_through() -> None:
 
     assert error is None
     spec = charts[0]
-    assert spec.get("explanation") == "Shows how sales are distributed across regions."
-    assert spec.get("columns_used") == ["region", "sales"]
+    assert spec.explanation == "Shows how sales are distributed across regions."
+    assert spec.columns_used == ["region", "sales"]
 
 
 def test_parse_spec_without_optional_fields() -> None:
@@ -97,7 +97,7 @@ def test_parse_spec_without_optional_fields() -> None:
 
     assert error is None
     assert len(charts) == 1
-    assert "explanation" not in charts[0]
+    assert charts[0].explanation is None
 
 
 def test_parse_all_allowed_chart_types() -> None:
@@ -203,7 +203,7 @@ def test_parse_partial_success_mixed_specs() -> None:
 
     # At least the valid chart should come through
     assert len(charts) == 1
-    assert charts[0]["title"] == "Good chart"
+    assert charts[0].title == "Good chart"
     # Error should mention the failed spec
     assert error is not None
 

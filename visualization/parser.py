@@ -63,18 +63,18 @@ def _validate_chart_spec(raw: object) -> tuple[ChartSpec | None, str]:
         allowed = ", ".join(sorted(ALLOWED_CHART_TYPES))
         return None, f"Unknown chart_type {chart_type!r}. Allowed: {allowed}"
 
-    # Build the spec with required fields first
-    spec: ChartSpec = {
-        "title": str(raw["title"]),
-        "chart_type": chart_type,
-        "code": str(raw["code"]),
-    }
-
-    # Attach optional fields when present
-    if "explanation" in raw:
-        spec["explanation"] = str(raw["explanation"])
-    if "columns_used" in raw and isinstance(raw["columns_used"], list):
-        spec["columns_used"] = [str(c) for c in raw["columns_used"]]
+    # Build the spec with required and optional fields
+    spec = ChartSpec(
+        title=str(raw["title"]),
+        chart_type=chart_type,
+        code=str(raw["code"]),
+        explanation=str(raw["explanation"]) if "explanation" in raw else None,
+        columns_used=(
+            [str(c) for c in raw["columns_used"]]
+            if "columns_used" in raw and isinstance(raw["columns_used"], list)
+            else []
+        ),
+    )
 
     return spec, ""
 

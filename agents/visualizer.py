@@ -1,85 +1,55 @@
-"""Visualizer agent — the high-level entry point for Phase 3.
+"""Visualizer agent — the high-level entry point for the visualization pipeline.
 
 Workflow
 --------
-1. ``generate_visualizations`` builds a prompt from the dataset context.
-2. The prompt is sent to the local Ollama LLM via ``call_llm``.
-3. The raw LLM response is parsed and validated by ``parse_llm_output``.
-4. Each chart spec's code is executed against the DataFrame by ``execute_chart``.
-5. A structured :class:`~visualization.schemas.VisualizationOutput` is returned.
+1. :class:`VisualizerAgent` loads its prompt templates from
+   ``config/prompts.yaml`` and builds a LangChain chain.
+2. :func:`run_visualization_pipeline` calls the agent, parses the output, and
+   executes each chart spec against the DataFrame.
+3. :func:`generate_visualizations` is a backward-compatible wrapper that
+   constructs a :class:`~visualization.schemas.VisualizerRequest` from the
+   legacy positional arguments.
 
 Integration contract
 --------------------
-This function is meant to be called by:
+Called by:
     - The LangGraph orchestrator (``graph/pipeline.py``)
-    - The Streamlit UI (``app/main.py``) directly for demo purposes
+    - The Streamlit UI (``app/pages/visualizer_playground.py``)
 
 Input:
-    df              — the uploaded dataset as a pandas DataFrame
-    profile_summary — text summary produced by the Profiler agent
-    insights_text   — insights produced by the Analyst agent
-    columns_info    — optional pre-formatted "column (dtype)" string
+    A :class:`~visualization.schemas.VisualizerRequest` (or the legacy
+    positional signature of :func:`generate_visualizations`).
 
-Output: VisualizationOutput (see visualization/schemas.py for the full shape)
+Output:
+    :class:`~visualization.schemas.VisualizationPipelineResult` — a dataclass
+    with ``charts``, ``raw_llm_output``, and ``parsing_error`` fields.
 """
 
 from __future__ import annotations
 
+import pathlib
 from typing import TYPE_CHECKING
 
-from utils.llm import call_llm
+import yaml
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+
+from utils.llm import LLMClient
 from visualization.executor import execute_chart
 from visualization.parser import parse_llm_output
+from visualization.schemas import (
+    ALLOWED_CHART_TYPES,
+    RenderedChart,
+    VisualizationPipelineResult,
+    VisualizerLLMOutput,
+    VisualizerRequest,
+)
 
 if TYPE_CHECKING:
     import pandas as pd
+    from langchain_core.language_models import BaseChatModel
 
-    from visualization.schemas import ChartResult, VisualizationOutput
-
-# ---------------------------------------------------------------------------
-# Prompt template
-# ---------------------------------------------------------------------------
-# Uses str.format() placeholders ({columns_info} etc.) rather than an f-string
-# because the JSON example inside the template contains literal { } characters
-# that would require clunky escaping in an f-string.  {{ }} → { } after .format().
-
-_PROMPT_TEMPLATE = """\
-You are a data visualization assistant. Given a dataset profile and business \
-insights, propose 3 to 5 charts that best help the user understand the data.
-
-AVAILABLE COLUMNS (use ONLY these — never invent column names):
-{columns_info}
-
-DATASET PROFILE SUMMARY:
-{profile_summary}
-
-INSIGHTS TO ILLUSTRATE:
-{insights_text}
-
-STRICT RULES — follow exactly:
-1. Output ONLY valid JSON.  Your response must start with {{ and end with }}.
-   No markdown, no prose before or after the JSON.
-2. Use only the column names listed above.  Do NOT invent new column names.
-3. Each "code" value must use the variable `df` (a pandas DataFrame, already loaded).
-4. The code must assign the final Plotly figure to a variable named `fig`.
-5. Use only plotly.express (px) or plotly.graph_objects (go).  No import statements.
-6. Allowed chart_type values: bar, line, scatter, histogram, box, heatmap, pie.
-7. Keep each code snippet simple and directly executable (one or two lines).
-8. Prefer charts that directly support the insights above.
-
-REQUIRED OUTPUT FORMAT:
-{{
-  "charts": [
-    {{
-      "title": "Sales by Region",
-      "chart_type": "bar",
-      "code": "fig = px.bar(df, x='region', y='sales', title='Sales by Region')",
-      "explanation": "Shows how total sales are distributed across regions.",
-      "columns_used": ["region", "sales"]
-    }}
-  ]
-}}\
-"""
+_PROMPTS_PATH = pathlib.Path(__file__).parent.parent / "config" / "prompts.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -87,28 +57,141 @@ REQUIRED OUTPUT FORMAT:
 # ---------------------------------------------------------------------------
 
 
-def _build_prompt(profile_summary: str, insights_text: str, columns_info: str) -> str:
-    """Render the prompt template with the caller-supplied context strings."""
-    return _PROMPT_TEMPLATE.format(
-        columns_info=columns_info,
-        profile_summary=profile_summary,
-        insights_text=insights_text,
-    )
+def _load_visualizer_prompts() -> dict[str, str]:
+    """Load the ``visualizer`` section from ``config/prompts.yaml``.
+
+    Returns:
+        A dict with ``"system"`` and ``"human"`` string keys.
+    """
+    with _PROMPTS_PATH.open() as fh:
+        data = yaml.safe_load(fh)
+    return data["visualizer"]  # type: ignore[return-value]
 
 
 def _columns_info_from_df(df: pd.DataFrame) -> str:
-    """Build a human-readable column list from a DataFrame.
-
-    Produces a string like ``"region (object), sales (float64)"`` which the LLM
-    can reference directly when writing column names in generated code.
-
-    This is used automatically when the caller does not supply ``columns_info``.
-    """
+    """Build a ``"col (dtype), ..."`` string from DataFrame column metadata."""
     return ", ".join(f"{col} ({dtype})" for col, dtype in df.dtypes.items())
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Agent class
+# ---------------------------------------------------------------------------
+
+
+class VisualizerAgent:
+    """LLM-driven chart-proposal agent.
+
+    Loads prompt templates from ``config/prompts.yaml`` and wraps a LangChain
+    chain that converts a :class:`~visualization.schemas.VisualizerRequest`
+    into raw LLM text or a parsed :class:`~visualization.schemas.VisualizerLLMOutput`.
+
+    Args:
+        llm: Optional pre-built LangChain chat model.  When omitted,
+             :meth:`~utils.llm.LLMClient.get_code_llm` is used to obtain the
+             configured code-generation model (``OLLAMA_CODE_MODEL``).
+    """
+
+    def __init__(self, llm: BaseChatModel | None = None) -> None:
+        prompts = _load_visualizer_prompts()
+        _llm = llm or LLMClient.get_code_llm()
+        self._chain = (
+            ChatPromptTemplate.from_messages(
+                [("system", prompts["system"]), ("human", prompts["human"])]
+            )
+            | _llm
+            | StrOutputParser()
+        )
+
+    def generate_raw(self, request: VisualizerRequest) -> str:
+        """Call the LLM and return the unmodified response string.
+
+        Args:
+            request: The fully populated :class:`VisualizerRequest`.
+
+        Returns:
+            The raw text returned by the LLM (expected to be JSON).
+        """
+        return self._chain.invoke(
+            {
+                "columns_info": request.columns_info,
+                "profile_markdown": request.profile_markdown,
+                "insights_markdown": request.insights_markdown,
+                "allowed_chart_types": ", ".join(sorted(ALLOWED_CHART_TYPES)),
+            }
+        )
+
+    def generate(self, request: VisualizerRequest) -> VisualizerLLMOutput:
+        """Call the LLM, parse the response, and return validated chart specs.
+
+        Args:
+            request: The fully populated :class:`VisualizerRequest`.
+
+        Returns:
+            A :class:`VisualizerLLMOutput` wrapping the valid chart specs.
+            Invalid specs are silently dropped; call :meth:`generate_raw` if
+            you need the full error picture.
+        """
+        raw = self.generate_raw(request)
+        specs, _ = parse_llm_output(raw)
+        return VisualizerLLMOutput(charts=specs)
+
+
+# ---------------------------------------------------------------------------
+# High-level pipeline function
+# ---------------------------------------------------------------------------
+
+
+def run_visualization_pipeline(
+    df: pd.DataFrame,
+    request: VisualizerRequest,
+    llm: BaseChatModel | None = None,
+) -> VisualizationPipelineResult:
+    """Run the full visualization pipeline and return structured results.
+
+    Steps:
+        1. Call the LLM via :class:`VisualizerAgent`.
+        2. Parse and validate chart specs via :func:`~visualization.parser.parse_llm_output`.
+        3. Execute each chart's code against *df* via
+           :func:`~visualization.executor.execute_chart`.
+
+    This function never raises.  All failures (LLM unreachable, bad JSON,
+    code execution errors) are captured and surfaced in the return value.
+
+    Args:
+        df:      The dataset as a pandas DataFrame.
+        request: The pre-built :class:`VisualizerRequest`.
+        llm:     Optional pre-built LangChain chat model (passed to the agent).
+
+    Returns:
+        A :class:`VisualizationPipelineResult` with ``charts``,
+        ``raw_llm_output``, and ``parsing_error`` fields.
+    """
+    agent = VisualizerAgent(llm=llm)
+
+    try:
+        raw_output = agent.generate_raw(request)
+    except RuntimeError as exc:
+        return VisualizationPipelineResult(
+            charts=[],
+            raw_llm_output="",
+            parsing_error=f"LLM call failed: {exc}",
+        )
+
+    specs, parsing_error = parse_llm_output(raw_output)
+
+    charts: list[RenderedChart] = [
+        RenderedChart(spec=spec, execution=execute_chart(df, spec.code)) for spec in specs
+    ]
+
+    return VisualizationPipelineResult(
+        charts=charts,
+        raw_llm_output=raw_output,
+        parsing_error=parsing_error,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible wrapper
 # ---------------------------------------------------------------------------
 
 
@@ -117,52 +200,26 @@ def generate_visualizations(
     profile_summary: str,
     insights_text: str,
     columns_info: str = "",
-) -> VisualizationOutput:
-    """Run the full visualization pipeline and return structured results.
+) -> VisualizationPipelineResult:
+    """Backward-compatible wrapper around :func:`run_visualization_pipeline`.
 
-    This is the single function the rest of the project calls.
+    Accepts the legacy positional signature and constructs a
+    :class:`VisualizerRequest` before delegating to the pipeline.
 
     Args:
         df:              The dataset as a pandas DataFrame.
         profile_summary: Text description of the dataset (from Profiler agent).
         insights_text:   Business insights text (from Analyst agent).
-        columns_info:    Optional pre-formatted column description string.
-                         When empty, it is derived from ``df.dtypes`` automatically.
+        columns_info:    Optional pre-formatted ``"col (dtype), ..."`` string.
+                         Derived from ``df.dtypes`` when not provided.
 
     Returns:
-        A :class:`~visualization.schemas.VisualizationOutput` dict with:
-            - ``charts``          — list of (spec, execution) pairs
-            - ``raw_llm_output``  — unmodified LLM text (useful for debugging)
-            - ``parsing_error``   — error description, or None on full success
-
-    This function never raises.  All failures (LLM unreachable, bad JSON,
-    code execution errors) are captured and surfaced in the return value.
+        A :class:`VisualizationPipelineResult`.
     """
-    # Fall back to deriving column info directly from the DataFrame schema
     resolved_columns_info = columns_info or _columns_info_from_df(df)
-
-    prompt = _build_prompt(profile_summary, insights_text, resolved_columns_info)
-
-    # --- Step 1: call the LLM ---
-    try:
-        raw_output = call_llm(prompt)
-    except RuntimeError as exc:
-        return {
-            "charts": [],
-            "raw_llm_output": "",
-            "parsing_error": f"LLM call failed: {exc}",
-        }
-
-    # --- Step 2: parse and validate the LLM response ---
-    specs, parsing_error = parse_llm_output(raw_output)
-
-    # --- Step 3: execute each validated chart spec against the DataFrame ---
-    chart_results: list[ChartResult] = [
-        {"spec": spec, "execution": execute_chart(df, spec["code"])} for spec in specs
-    ]
-
-    return {
-        "charts": chart_results,
-        "raw_llm_output": raw_output,
-        "parsing_error": parsing_error,
-    }
+    request = VisualizerRequest(
+        profile_markdown=profile_summary,
+        insights_markdown=insights_text,
+        columns_info=resolved_columns_info,
+    )
+    return run_visualization_pipeline(df, request)
