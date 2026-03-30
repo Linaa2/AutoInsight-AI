@@ -22,7 +22,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import yaml
 
@@ -45,8 +45,8 @@ def _load_prompts() -> dict:
     for path in candidates:
         if path.exists():
             with path.open(encoding="utf-8") as f:
-                data: dict = yaml.safe_load(f)
-                return data
+                result: dict[str, dict[str, str]] = yaml.safe_load(f)
+                return result
     raise FileNotFoundError(f"prompts.yaml not found. Searched: {[str(p) for p in candidates]}")
 
 
@@ -75,7 +75,7 @@ def extract_json(raw: str) -> dict | None:
             brace_count -= 1
             if brace_count == 0:
                 try:
-                    result: dict = json.loads(cleaned[start : i + 1])
+                    result: dict[str, Any] = json.loads(cleaned[start : i + 1])
                     return result
                 except json.JSONDecodeError:
                     break
@@ -103,7 +103,7 @@ def fallback_parse_markdown(raw: str) -> list[dict]:
     Fallback parser: extract insights from structured markdown
     when the LLM does not respect JSON format.
     """
-    insights = []
+    insights: list[dict[str, str]] = []
     current: dict[str, str] = {}
 
     for line in raw.split("\n"):
@@ -263,8 +263,8 @@ class InsightCategorizer:
     def _categorize_with_llm(self, insight: dict) -> str:
         """Categorize using LLM with fallback to keywords on failure."""
         try:
-            system_prompt = PROMPTS["categorizer"]["system"]
-            human_prompt = PROMPTS["categorizer"]["human"].format(
+            system_prompt = PROMPTS["analyst"]["categorizer_system"]
+            human_prompt = PROMPTS["analyst"]["categorizer_human"].format(
                 insight_json=json.dumps(insight, ensure_ascii=False, indent=2)
             )
 
