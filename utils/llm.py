@@ -6,20 +6,14 @@ and the code model for visualizer/text-to-code agents.
 
 All model names and provider settings are read from :mod:`config.settings`
 (which in turn reads from ``.env`` / environment variables).
-
-Apple Silicon note: Ollama manages Metal (MPS) acceleration internally.
-Do NOT pass device="mps" or similar flags to ChatOllama — LangChain's
-ChatOllama client does not expose a device parameter.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
-
-load_dotenv()
+from langchain_ollama import ChatOllama
 
 from config.settings import settings
 
@@ -40,11 +34,6 @@ class LLMClient:
         llm = LLMClient.get_code_llm()    # for visualizer / text-to-code
         llm = LLMClient.get_text_llm()    # for profiler / analyst / reporter
         llm = LLMClient.get_llm("code")   # equivalent to get_code_llm()
-
-    Apple Silicon note:
-        Ollama handles Metal acceleration via the Ollama runtime daemon.
-        No ``device`` parameter is passed to ``ChatOllama`` — it does not
-        support one.  Configure GPU layers in Ollama settings if needed.
     """
 
     @staticmethod
@@ -80,6 +69,8 @@ class LLMClient:
     def _build(model: str) -> BaseChatModel:
         """Instantiate the LangChain chat model for the configured provider."""
         if settings.LLM_PROVIDER == "gemini":
+            from langchain_google_genai import ChatGoogleGenerativeAI
+
             return ChatGoogleGenerativeAI(
                 model=settings.GEMINI_MODEL,
                 convert_system_message_to_human=True,
@@ -87,7 +78,6 @@ class LLMClient:
         return ChatOllama(
             model=model,
             base_url=settings.OLLAMA_BASE_URL,
-            timeout=settings.LLM_TIMEOUT,
         )
 
 
@@ -123,3 +113,14 @@ def call_llm(prompt: str, model: str | None = None) -> str:
     Legacy helper — prefer ``LLMClient`` + ``ChatPromptTemplate`` for new code.
     """
     return call_llm_with_messages(system="", human=prompt, model=model)
+
+
+def check_ollama_health() -> bool:
+    """Return True if the Ollama server is reachable, False otherwise."""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(settings.OLLAMA_BASE_URL, timeout=3):
+            return True
+    except Exception:
+        return False

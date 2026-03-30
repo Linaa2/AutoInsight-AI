@@ -1,150 +1,193 @@
-# Phase 3: Reporter Agent
+# Phase 3: Visualizer Agent
 
-## Overview
+The Visualizer Agent (`agents/visualizer.py`) is Phase 3 of the AutoInsight-AI pipeline.
+It takes structured context from the Profiler and Analyst agents and produces rendered
+Plotly charts by asking a code-generation LLM to write the visualization code.
 
-The Reporter agent (`agents/reporter.py`) synthesizes outputs from the Profiler (P1), Analyst (P2), and Visualizer (P3) into a cohesive, executive-ready markdown report.
+---
 
 ## Architecture
 
 ```
-agents/reporter.py        → Core reporter agent + helpers + LangGraph node
-config/prompts.yaml       → Reporter prompt (reporter section)
-app/main.py               → Streamlit UI (Report tab)
-tests/test_reporter.py    → Unit + integration tests
+VisualizerRequest
+      │
+      ▼
+VisualizerAgent._chain   ← ChatPromptTemplate (system + human from prompts.yaml)
+      │                     │
+      │                     └─ LLMClient.get_code_llm()  ← OLLAMA_CODE_MODEL
+      ▼
+  raw LLM text (JSON)
+      │
+      ▼
+parse_llm_output()       ← visualization/parser.py
+      │
+      ▼
+list[ChartSpec]
+      │
+      ▼
+execute_chart()          ← visualization/executor.py  (restricted exec sandbox)
+      │
+      ▼
+VisualizationPipelineResult
 ```
 
-### Class
+---
+
+## Data Contracts
+
+All contracts are stdlib `dataclasses` defined in `visualization/schemas.py`.
 
 | Class | Role |
 |---|---|
-| `ReporterAgent` | Synthesizes all pipeline outputs into a structured markdown report |
+| `VisualizerRequest` | Input: profile + insights + column list |
+| `ChartSpec` | One chart: title, chart_type, code, explanation, columns_used |
+| `VisualizerLLMOutput` | Parsed list of `ChartSpec` objects |
+| `ChartExecutionResult` | Success flag, Plotly figure, error string |
+| `RenderedChart` | `ChartSpec` paired with its `ChartExecutionResult` |
+| `VisualizationPipelineResult` | Full output: list of `RenderedChart` + metadata |
 
-### Helper Functions
+---
 
-| Function | Role |
-|---|---|
-| `extract_chart_titles()` | Extracts chart titles from visualizer output |
-| `build_charts_summary()` | Formats chart titles into a bullet list for the prompt |
-| `build_insights_summary()` | Formats insights with priority, category, and observations |
-| `reporter_node()` | LangGraph node entry point |
+## LLM Model Routing
 
-## Pipeline
+`LLMClient` (`utils/llm.py`) routes to different models based on task type:
 
+| Method | Env var | Default | Use case |
+|---|---|---|---|
+| `get_text_llm()` | `OLLAMA_TEXT_MODEL` | `qwen3:14b` | Natural language reasoning |
+| `get_code_llm()` | `OLLAMA_CODE_MODEL` | `qwen2.5-coder:14b` | Code generation |
+
+The Visualizer Agent uses `get_code_llm()` because it generates executable Python.
+
+Set `LLM_PROVIDER=gemini` to route to Google Gemini instead of Ollama.
+
+---
+
+## Prompt Structure
+
+Templates live in `config/prompts.yaml` under the `visualizer` key.
+
+```yaml
+visualizer:
+  system: |          # Static role + JSON format rules
+  human: |           # Dynamic: {columns_info}, {profile_markdown}, {insights_markdown}
 ```
-profiler_output + analyst_output + insights + visualizer_output
-        │
-        ▼
-  ┌────────────────┐
-  │  ReporterAgent  │
-  │     .run()      │
-  └───────┬─────────┘
-          │
-    1. build_charts_summary()    → Format chart titles as bullet list
-    2. build_insights_summary()  → Format insights with priority/category
-    3. Load prompts from config/prompts.yaml
-    4. Call LLM with system + human messages
-    5. Return {"reporter_output": str}
-          │
-          ▼
-  { "reporter_output": str }
+
+`ChatPromptTemplate.from_messages` loads both parts. Literal `{` / `}` in the
+system template are escaped as `{{` / `}}` following ChatPromptTemplate convention.
+
+---
+
+## Execution Sandbox
+
+`execute_chart(df, code)` runs LLM-generated code in a restricted namespace:
+
+```python
+namespace = {
+    "__builtins__": {},   # no imports, no open(), no eval()
+    "df": df,             # the caller's DataFrame
+    "pd": pandas,
+    "px": plotly.express,
+    "go": plotly.graph_objects,
+    "np": numpy,
+}
+exec(code, namespace)
+fig = namespace.get("fig")  # must be assigned by the generated code
 ```
 
-## Input
+With `__builtins__ = {}`:
+- `import` statements in generated code **raise** and are caught cleanly.
+- Dangerous built-ins (`open`, `__import__`, `eval`) are unavailable.
+- Simple one-liners (`fig = px.bar(df, ...)`) work without builtins.
 
-| Key | Type | Description |
+---
+
+## Environment Variables
+
+| Variable | Default | Description |
 |---|---|---|
-| `profiler_output` | `str` | Markdown report from the Profiler agent |
-| `analyst_output` | `str` | Markdown report from the Analyst agent |
-| `insights` | `list[dict]` (optional) | Structured insight objects from the Analyst |
-| `visualizer_output` | `dict` (optional) | Contains `"charts"` key with list of chart dicts |
+| `LLM_PROVIDER` | `ollama` | `"ollama"` or `"gemini"` |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+| `OLLAMA_TEXT_MODEL` | `qwen3:14b` | Model for text/reasoning tasks |
+| `OLLAMA_CODE_MODEL` | `qwen2.5-coder:14b` | Model for code-generation tasks |
+| `LLM_TIMEOUT` | `60` | Request timeout in seconds |
+| `GEMINI_MODEL` | `gemini-1.5-flash` | Gemini model name (when provider=gemini) |
+| `GOOGLE_API_KEY` | — | Required when `LLM_PROVIDER=gemini` |
 
-## Output
+Copy `.env.example` to `.env` and fill in values before running.
 
-| Key | Type | Description |
-|---|---|---|
-| `reporter_output` | `str` | Full executive-ready markdown report |
-| `error` | `str` (optional) | Error message if generation failed |
+> **Apple Silicon note**: Ollama handles Metal/MPS acceleration internally.
+> Do not pass `device="mps"` to any LangChain model — it is not a supported parameter.
 
-## Report Sections
+---
 
-The generated report follows this structure:
+## Public API
 
-| Section | Description |
-|---|---|
-| 📝 **Executive Summary** | 3–5 sentences for decision-makers: dataset size, number of insights, most critical finding |
-| 📊 **Dataset Description** | Source, size, time period, data quality, missing values, duplicates |
-| 🔍 **Key Insights** | Insights reformulated narratively, grouped by theme/priority, with business value |
-| 📈 **Visualizations** | One sentence interpreting each chart; suggests charts if none were generated |
-| ✅ **Recommendations** | 3–5 concrete, actionable items referencing specific insights, prioritized by impact |
-| ⚠️ **Limitations & Next Steps** | What the analysis doesn't cover, 2–3 next steps, additional data sources |
-
-## Prompts
-
-Located in `config/prompts.yaml` under the `reporter` key:
-
-- **reporter.system**: Instructions for writing a professional, non-technical executive report
-- **reporter.human**: Template with `{profiler_output}`, `{analyst_output}`, `{insights_summary}`, `{charts_summary}`
-
-## Streamlit UI (Report Tab)
-
-The Report tab in `app/main.py` provides:
-
-- **Prerequisites**: Requires both Profiler AI analysis and Analyst insights to be generated first
-- **Generate button**: `📄 Generate Full Report`
-- **Display**: Full markdown report rendered in the UI
-- **Download**: `⬇️ Download Report` button saves the report as `analysis_report.md`
-
-### Session State Keys
-
-| Key | Source |
-|---|---|
-| `ai_description` | Profiler output (P1) |
-| `analyst_markdown` | Analyst markdown (P2) |
-| `analyst_insights` | Analyst structured insights (P2) |
-| `reporter_output` | Reporter output (P3) |
-
-## Testing
-
-```bash
-# Unit tests only (no LLM / no Ollama needed)
-uv run python tests/test_reporter.py
-
-# Full test suite
-uv run pytest tests/ -v
+```python
+from agents.visualizer import (
+    VisualizerAgent,            # class — for direct use or dependency injection
+    run_visualization_pipeline, # full pipeline: LLM → parse → exec
+    generate_visualizations,    # backward-compatible wrapper
+)
+from visualization.schemas import VisualizerRequest, VisualizationPipelineResult
 ```
 
-### Unit Tests (no LLM)
+### High-level usage (recommended)
 
-| Test | What it verifies |
-|---|---|
-| `test_extract_chart_titles` | Extracts chart titles from visualizer dict |
-| `test_extract_chart_titles_empty` | Handles None, empty dict, empty charts list |
-| `test_build_charts_summary` | Formats chart titles as bullet list |
-| `test_build_charts_summary_none` | Returns fallback message when no charts |
-| `test_build_insights_summary` | Formats insights with priority, category, numbering |
-| `test_build_insights_summary_empty` | Handles None and empty list |
+```python
+import pandas as pd
+from agents.visualizer import generate_visualizations
 
-### Integration Tests (require Ollama)
+df = pd.read_csv("my_dataset.csv")
+result = generate_visualizations(
+    df=df,
+    profile_summary="Dataset contains 5 000 rows...",
+    insights_text="Sales peak in Q4. Region East outperforms others.",
+    columns_info="region (object), sales (float64), quarter (int64)",
+)
 
-| Test | What it verifies |
-|---|---|
-| `test_reporter_agent_with_llm` | Full `ReporterAgent.run()` pipeline with mock data |
-| `test_reporter_node_with_llm` | LangGraph `reporter_node()` with mock state |
-
-## Configuration
-
-The reporter uses the **text model** configured in `.env`:
-
-```env
-OLLAMA_TEXT_MODEL=mistral    # Each contributor sets their own model
-LLM_PROVIDER=ollama          # or "gemini"
+for chart in result.charts:
+    if chart.execution.success:
+        chart.execution.figure.show()
 ```
 
-## Files Modified/Created
+### With explicit request object
 
-| File | Action |
+```python
+from agents.visualizer import run_visualization_pipeline
+from visualization.schemas import VisualizerRequest
+
+request = VisualizerRequest(
+    profile_markdown="...",
+    insights_markdown="...",
+    columns_info="region (object), sales (float64)",
+)
+result = run_visualization_pipeline(df, request)
+```
+
+### With dependency injection (testing)
+
+```python
+from unittest.mock import MagicMock
+from agents.visualizer import VisualizerAgent
+from visualization.schemas import VisualizerRequest
+
+mock_llm = MagicMock()
+mock_llm.invoke.return_value.content = '{"charts": []}'
+
+agent = VisualizerAgent(llm=mock_llm)
+raw = agent.generate_raw(VisualizerRequest(...))
+```
+
+---
+
+## Error Handling
+
+The pipeline never raises. All failures are captured in `VisualizationPipelineResult`:
+
+| Failure mode | Where it appears |
 |---|---|
-| `agents/reporter.py` | Created — core reporter agent |
-| `config/prompts.yaml` | Modified — added reporter prompts |
-| `app/main.py` | Modified — added Report tab (P3 UI) with download button |
-| `tests/test_reporter.py` | Created — unit + integration tests |
+| LLM unreachable / timeout | `parsing_error = "LLM call failed: ..."`, `charts = []` |
+| LLM returns non-JSON | `parsing_error = "Could not find a JSON object..."` |
+| Some chart specs invalid | `parsing_error` describes each failure; valid charts still returned |
+| Chart code crashes at exec | `chart.execution.success = False`, `chart.execution.error` has details |

@@ -21,36 +21,16 @@ Output:
 import json
 import logging
 import re
-from pathlib import Path
 from typing import Any, ClassVar
 
-import yaml
-
 from utils.llm import call_llm_with_messages
+from utils.prompt_loader import load_prompt_section
 
 logger = logging.getLogger(__name__)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  PROMPT LOADER
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-def _load_prompts() -> dict:
-    """Load prompts from config/prompts.yaml."""
-    candidates = [
-        Path(__file__).resolve().parent.parent / "config" / "prompts.yaml",
-        Path.cwd() / "config" / "prompts.yaml",
-    ]
-    for path in candidates:
-        if path.exists():
-            with path.open(encoding="utf-8") as f:
-                result: dict[str, dict[str, str]] = yaml.safe_load(f)
-                return result
-    raise FileNotFoundError(f"prompts.yaml not found. Searched: {[str(p) for p in candidates]}")
-
-
-PROMPTS = _load_prompts()
+# Load prompts through canonical loader
+PROMPTS: dict[str, dict[str, str]] = {"analyst": load_prompt_section("analyst")}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -410,14 +390,26 @@ class AnalystAgent:
         profile_data: dict | None = None,
     ) -> list[dict]:
         """Call the LLM (text model) to generate raw insights."""
-        shape = profile_data.get("shape", {}) if profile_data else {}
-        missing = profile_data.get("missing_values", {}) if profile_data else {}
+        # profile_data["shape"] may be [rows, cols] (list) or {"rows": …, "cols": …} (dict).
+        raw_shape = profile_data.get("shape", {}) if profile_data else {}
+        if isinstance(raw_shape, list):
+            rows = raw_shape[0] if len(raw_shape) > 0 else "?"
+            cols = raw_shape[1] if len(raw_shape) > 1 else "?"
+        else:
+            rows = raw_shape.get("rows", "?")
+            cols = raw_shape.get("cols", "?")
+
+        missing = (
+            profile_data.get("missing_values", profile_data.get("missing", {}))
+            if profile_data
+            else {}
+        )
 
         system_prompt = PROMPTS["analyst"]["system"]
         human_prompt = PROMPTS["analyst"]["human"].format(
             profiler_output=profiler_output,
-            rows=shape.get("rows", "?"),
-            cols=shape.get("cols", "?"),
+            rows=rows,
+            cols=cols,
             missing_values=json.dumps(missing, ensure_ascii=False) if missing else "None",
             sample_text=sample_text,
         )

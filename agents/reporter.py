@@ -17,35 +17,15 @@ Output:
 """
 
 import logging
-from pathlib import Path
-
-import yaml
 
 from utils.llm import call_llm_with_messages
+from utils.prompt_loader import load_prompt_section
 
 logger = logging.getLogger(__name__)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  PROMPT LOADER
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-def _load_prompts() -> dict:
-    """Load prompts from config/prompts.yaml."""
-    candidates = [
-        Path(__file__).resolve().parent.parent / "config" / "prompts.yaml",
-        Path.cwd() / "config" / "prompts.yaml",
-    ]
-    for path in candidates:
-        if path.exists():
-            with path.open(encoding="utf-8") as f:
-                data: dict = yaml.safe_load(f)
-                return data
-    raise FileNotFoundError(f"prompts.yaml not found. Searched: {[str(p) for p in candidates]}")
-
-
-PROMPTS = _load_prompts()
+# Load prompts through canonical loader
+PROMPTS: dict[str, dict[str, str]] = {"reporter": load_prompt_section("reporter")}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

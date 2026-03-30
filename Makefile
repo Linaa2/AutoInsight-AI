@@ -13,6 +13,9 @@ pre-commit: ## Run all pre-commit checks
 lint: ## Run ruff linting
 	uv run ruff check
 
+typecheck: ## Run mypy type checking
+	uv run mypy .
+
 format: ## Check code formatting with ruff
 	uv run ruff format --check
 
@@ -21,10 +24,15 @@ fix: ## Auto-fix formatting (trailing whitespace, end-of-file)
 	uv run pre-commit run trailing-whitespace --all-files || true
 	uv run pre-commit run end-of-file-fixer --all-files || true
 
-test: ## Run pytest
+test: ## Run pytest (unit tests only — fast)
+	uv run pytest tests/ -v -m "not integration"
+
+test-all: ## Run all tests including LLM integration tests
 	uv run pytest tests/ -v
 
 check: lint format test pre-commit ## Run all checks (linting, formatting, tests, pre-commit hooks)
+
+ci: check typecheck ## Run all checks including type checking (for CI pipelines)
 
 run: ## Run the Streamlit app
 	uv run streamlit run app/main.py

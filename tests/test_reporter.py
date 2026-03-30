@@ -11,6 +11,8 @@ from pathlib import Path
 # Fix import: add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.resolve()))
 
+import pytest
+
 from agents.mock_profiler import get_mock_state
 from agents.reporter import (
     ReporterAgent,
@@ -111,6 +113,7 @@ def test_build_insights_summary_empty():
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.integration
 def test_reporter_agent_with_llm():
     """Test the full ReporterAgent pipeline with LLM."""
     from utils.llm import LLMClient
@@ -195,6 +198,7 @@ def test_reporter_agent_with_llm():
     return True
 
 
+@pytest.mark.integration
 def test_reporter_node_with_llm():
     """Test the LangGraph node entry point."""
     from utils.llm import LLMClient

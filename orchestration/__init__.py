@@ -1,9 +1,10 @@
-"""LangGraph orchestration package for AutoInsight-AI.
+"""Canonical orchestration package for AutoInsight-AI.
 
 Public API::
 
-    from orchestration.graph import build_graph
+    from orchestration.graph import build_graph, run_analysis
+    from orchestration.state import PipelineState
 
-    graph = build_graph()
-    result = graph.invoke(initial_state)
+    # Quick usage
+    result = run_analysis(df, file_name="sales.csv")
 """
