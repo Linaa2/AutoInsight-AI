@@ -58,20 +58,18 @@ class TestDataLoader:
     # Excel sheet selection via env
     # ------------------------------------------------------------------
 
-    def test_excel_sheet_env_integer(self, tmp_path, sample_df, monkeypatch):
-        monkeypatch.setenv("DATA_LOADER_EXCEL_SHEET", "0")
+    def test_excel_sheet_env_integer(self, tmp_path, sample_df):
         path = tmp_path / "multi.xlsx"
         with pd.ExcelWriter(path) as writer:
             sample_df.to_excel(writer, sheet_name="Sheet1", index=False)
             sample_df.head(5).to_excel(writer, sheet_name="Sheet2", index=False)
-        df = DataLoader().load(str(path))
+        df = DataLoader(excel_sheet=0).load(str(path))
         assert df.shape[0] == sample_df.shape[0]
 
-    def test_excel_sheet_env_name(self, tmp_path, sample_df, monkeypatch):
-        monkeypatch.setenv("DATA_LOADER_EXCEL_SHEET", "Sheet2")
+    def test_excel_sheet_env_name(self, tmp_path, sample_df):
         path = tmp_path / "named.xlsx"
         with pd.ExcelWriter(path) as writer:
             sample_df.to_excel(writer, sheet_name="Sheet1", index=False)
             sample_df.head(5).to_excel(writer, sheet_name="Sheet2", index=False)
-        df = DataLoader().load(str(path))
+        df = DataLoader(excel_sheet="Sheet2").load(str(path))
         assert df.shape[0] == 5

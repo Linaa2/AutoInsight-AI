@@ -1,31 +1,30 @@
 """Profiler agent — generates a structured markdown description of a dataset profile."""
 
-import json
-import os
-from pathlib import Path
-from typing import Any
+from __future__ import annotations
 
-import yaml
+import json
+from typing import TYPE_CHECKING
+
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
-from tools.profiler_engine import DataProfile
 from utils.llm import LLMClient
+from utils.prompt_loader import load_prompt_section
 
-_DEFAULT_PROMPTS_PATH = Path(__file__).parent.parent / "config" / "prompts.yaml"
+if TYPE_CHECKING:
+    from tools.profiler_engine import DataProfile
 
 
 class ProfilerAgent:
     """Uses an LLM to produce a human-readable markdown report from a :class:`DataProfile`.
 
-    Environment variables:
-        PROMPTS_PATH: Override path to the prompts YAML file.
-                      Defaults to config/prompts.yaml relative to the project root.
+    Prompts are loaded from ``config/prompts.yaml`` via the shared prompt loader.
+    The LLM used is the **text** model (``OLLAMA_TEXT_MODEL``).
     """
 
     def __init__(self, llm_client: LLMClient | None = None) -> None:
         self._llm_client = llm_client or LLMClient()
-        self._prompts = self._load_prompts()
+        self._prompts = load_prompt_section("profiler")
 
     def describe(self, profile: DataProfile) -> str:
         """Generate a structured markdown description for *profile*.
@@ -47,15 +46,3 @@ class ProfilerAgent:
         )
         chain = prompt | llm | StrOutputParser()
         return chain.invoke({"profile_json": profile_json})
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
-    def _load_prompts(self) -> dict[str, Any]:
-        path = Path(os.getenv("PROMPTS_PATH", str(_DEFAULT_PROMPTS_PATH)))
-        with path.open(encoding="utf-8") as fh:
-            data: dict[str, Any] = yaml.safe_load(fh)
-        if "profiler" not in data:
-            raise KeyError(f"'profiler' key not found in prompts file: {path}")
-        return dict(data["profiler"])

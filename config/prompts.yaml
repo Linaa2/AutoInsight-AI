@@ -1,4 +1,9 @@
-<<<<<<< HEAD
+# Prompt templates for AutoInsight-AI agents.
+#
+# Variables are delimited with single braces: {variable_name}.
+# Literal braces that appear in examples must be doubled: {{ and }}.
+# ChatPromptTemplate converts {{ → { and {variable} → the runtime value.
+
 profiler:
   system: |
     You are an expert data analyst and statistician. Your job is to read a structured
@@ -49,7 +54,7 @@ profiler:
       distributions, near-constant columns, correlated-looking pairs (inferred from names), etc.
 
     **💡 Key Takeaways & Recommendations**
-    - List exactly 3–5 concise, *actionable* recommendations for anyone who wants to use this
+    - List exactly 3-5 concise, *actionable* recommendations for anyone who wants to use this
       dataset (e.g. imputation strategy, encoding, outlier treatment, feature engineering ideas).
 
 

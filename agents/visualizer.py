@@ -27,14 +27,13 @@ Output:
 
 from __future__ import annotations
 
-import pathlib
 from typing import TYPE_CHECKING
 
-import yaml
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from utils.llm import LLMClient
+from utils.prompt_loader import load_prompt_section
 from visualization.executor import execute_chart
 from visualization.parser import parse_llm_output
 from visualization.schemas import (
@@ -49,23 +48,10 @@ if TYPE_CHECKING:
     import pandas as pd
     from langchain_core.language_models import BaseChatModel
 
-_PROMPTS_PATH = pathlib.Path(__file__).parent.parent / "config" / "prompts.yaml"
-
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-
-def _load_visualizer_prompts() -> dict[str, str]:
-    """Load the ``visualizer`` section from ``config/prompts.yaml``.
-
-    Returns:
-        A dict with ``"system"`` and ``"human"`` string keys.
-    """
-    with _PROMPTS_PATH.open() as fh:
-        data = yaml.safe_load(fh)
-    return data["visualizer"]  # type: ignore[return-value]
 
 
 def _columns_info_from_df(df: pd.DataFrame) -> str:
@@ -92,7 +78,7 @@ class VisualizerAgent:
     """
 
     def __init__(self, llm: BaseChatModel | None = None) -> None:
-        prompts = _load_visualizer_prompts()
+        prompts = load_prompt_section("visualizer")
         _llm = llm or LLMClient.get_code_llm()
         self._chain = (
             ChatPromptTemplate.from_messages(

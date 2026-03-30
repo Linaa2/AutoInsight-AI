@@ -4,13 +4,14 @@ Computes shape, column statistics, missing values, duplicates, value
 distributions, and sample rows — all without any LLM involvement.
 """
 
-import os
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from config.settings import settings
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -109,15 +110,22 @@ class DataProfile:
 class DataProfiler:
     """Computes a deterministic :class:`DataProfile` for any pandas DataFrame.
 
-    Environment variables:
-        PROFILER_SAMPLE_ROWS:  Number of sample rows to include (default 5).
-        PROFILER_TOP_VALUES:   Max number of top values for categorical/boolean
-                               columns (default 10).
+    Args:
+        sample_rows:  Number of sample rows to include. Defaults to
+                      ``settings.PROFILER_SAMPLE_ROWS``.
+        top_values:   Max top values for categorical/boolean columns. Defaults
+                      to ``settings.PROFILER_TOP_VALUES``.
     """
 
-    def __init__(self) -> None:
-        self._sample_rows = int(os.getenv("PROFILER_SAMPLE_ROWS", "5"))
-        self._top_values = int(os.getenv("PROFILER_TOP_VALUES", "10"))
+    def __init__(
+        self,
+        sample_rows: int | None = None,
+        top_values: int | None = None,
+    ) -> None:
+        self._sample_rows = (
+            sample_rows if sample_rows is not None else settings.PROFILER_SAMPLE_ROWS
+        )
+        self._top_values = top_values if top_values is not None else settings.PROFILER_TOP_VALUES
 
     def profile(self, df: pd.DataFrame) -> DataProfile:
         """Compute a full profile for *df* and return a :class:`DataProfile`."""
