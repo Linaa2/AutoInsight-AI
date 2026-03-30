@@ -1,181 +1,150 @@
-"""LLM client factory supporting Ollama (local) and Google Gemini + monitoring utilities."""
+"""LLM client factory for AutoInsight-AI.
 
-import logging
+Supports Ollama (primary, local) and Gemini (optional cloud fallback).
+Model selection is task-aware: use the text model for profiler/analyst/reporter
+and the code model for visualizer/text-to-code agents.
+
+Configuration (environment variables)::
+
+    LLM_PROVIDER       = ollama          # or gemini
+    OLLAMA_BASE_URL    = http://localhost:11434
+    OLLAMA_TEXT_MODEL  = qwen3:14b
+    OLLAMA_CODE_MODEL  = qwen2.5-coder:14b
+    LLM_TIMEOUT        = 60
+
+Apple Silicon note: Ollama manages Metal (MPS) acceleration internally.
+Do NOT pass device="mps" or similar flags to ChatOllama — LangChain's
+ChatOllama client does not expose a device parameter.
+"""
+
+from __future__ import annotations
+
 import os
+from typing import TYPE_CHECKING, Literal
 
-from dotenv import load_dotenv
-from langchain_core.language_models import BaseChatModel
+from langchain_community.chat_models import ChatOllama
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
 
-load_dotenv()
+if TYPE_CHECKING:
+    from langchain_core.language_models.chat_models import BaseChatModel
 
-logger = logging.getLogger(__name__)
+# ---------------------------------------------------------------------------
+# Runtime configuration — read once from environment
+# ---------------------------------------------------------------------------
 
-# ──────────────────────────── Default config ───────────────────────────────
+_PROVIDER: str = os.getenv("LLM_PROVIDER", "ollama")
+_HOST: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+_TEXT_MODEL: str = os.getenv("OLLAMA_TEXT_MODEL", "qwen3:14b")
+_CODE_MODEL: str = os.getenv("OLLAMA_CODE_MODEL", "qwen2.5-coder:14b")
+_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "60"))
+_GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
-DEFAULT_BASE_URL = "http://localhost:11434"
-DEFAULT_MODEL = "mistral"
-DEFAULT_EMBED_MODEL = "nomic-embed-text"
 
-
-# ──────────────────────────── LLMClient (shared) ───────────────────────────
+# ---------------------------------------------------------------------------
+# LLMClient
+# ---------------------------------------------------------------------------
 
 
 class LLMClient:
-    """Creates and returns a LangChain-compatible chat model.
+    """Factory for task-aware LangChain-compatible chat models.
 
-    Environment variables:
-        LLM_PROVIDER:      "ollama" (default) or "gemini"
-        OLLAMA_MODEL:      Ollama model name, e.g. "mistral"
-        OLLAMA_BASE_URL:   Ollama server URL, e.g. "http://localhost:11434"
-        GEMINI_MODEL:      Gemini model name, e.g. "gemini-1.5-flash"
-        GOOGLE_API_KEY:    Required when LLM_PROVIDER=gemini
-        LLM_TIMEOUT:       Request timeout in seconds (default 60)
+    Usage::
+
+        llm = LLMClient.get_code_llm()    # for visualizer / text-to-code
+        llm = LLMClient.get_text_llm()    # for profiler / analyst / reporter
+        llm = LLMClient.get_llm("code")   # equivalent to get_code_llm()
+
+    Apple Silicon note:
+        Ollama handles Metal acceleration via the Ollama runtime daemon.
+        No ``device`` parameter is passed to ``ChatOllama`` — it does not
+        support one.  Configure GPU layers in Ollama settings if needed.
     """
 
-    def __init__(self) -> None:
-        self._provider = os.getenv("LLM_PROVIDER", "ollama")
-        self._ollama_model = os.getenv("OLLAMA_MODEL", DEFAULT_MODEL)
-        self._ollama_base_url = os.getenv("OLLAMA_BASE_URL", DEFAULT_BASE_URL)
-        self._gemini_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-        self._timeout = int(os.getenv("LLM_TIMEOUT", "60"))
+    @staticmethod
+    def get_text_llm() -> BaseChatModel:
+        """Return a chat model for text generation tasks.
 
-    def get_llm(self) -> BaseChatModel:
-        """Return the configured LLM instance."""
-        if self._provider == "gemini":
-            return self._build_gemini()
-        return self._build_ollama()
+        Used by: Profiler, Analyst, Reporter agents.
+        Default model: ``OLLAMA_TEXT_MODEL`` env var (qwen3:14b).
+        """
+        return LLMClient._build(_TEXT_MODEL)
 
-    def _build_ollama(self) -> BaseChatModel:
-        from langchain_ollama import ChatOllama
+    @staticmethod
+    def get_code_llm() -> BaseChatModel:
+        """Return a chat model for code generation tasks.
 
-        return ChatOllama(
-            model=self._ollama_model,
-            base_url=self._ollama_base_url,
-            timeout=self._timeout,
-        )
+        Used by: Visualizer, Text-to-Code agents.
+        Default model: ``OLLAMA_CODE_MODEL`` env var (qwen2.5-coder:14b).
+        """
+        return LLMClient._build(_CODE_MODEL)
 
-    def _build_gemini(self) -> BaseChatModel:
-        from langchain_google_genai import ChatGoogleGenerativeAI
+    @staticmethod
+    def get_llm(kind: Literal["text", "code"] = "text") -> BaseChatModel:
+        """Return a text or code model by task name.
 
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            raise OSError(
-                "GOOGLE_API_KEY environment variable is required when LLM_PROVIDER=gemini"
+        Args:
+            kind: ``"text"`` for generation tasks, ``"code"`` for code tasks.
+        """
+        if kind == "code":
+            return LLMClient.get_code_llm()
+        return LLMClient.get_text_llm()
+
+    @staticmethod
+    def _build(model: str) -> BaseChatModel:
+        """Instantiate the LangChain chat model for the configured provider."""
+        if _PROVIDER == "gemini":
+            # Gemini API does not natively support system messages;
+            # convert_system_message_to_human merges them into the human turn.
+            return ChatGoogleGenerativeAI(
+                model=_GEMINI_MODEL,
+                convert_system_message_to_human=True,
             )
-        return ChatGoogleGenerativeAI(
-            model=self._gemini_model,
-            google_api_key=api_key,
-            timeout=self._timeout,
+        # Ollama (default) — no device parameter; Ollama handles acceleration.
+        return ChatOllama(
+            model=model,
+            base_url=_HOST,
+            timeout=_TIMEOUT,
         )
 
 
-# ──────────────────────────── Functional API (used by analyst) ─────────────
+# ---------------------------------------------------------------------------
+# Backward-compatible helpers — kept for existing callers
+# ---------------------------------------------------------------------------
 
 
-def get_llm(
-    temperature: float = 0.3,
+def call_llm_with_messages(
+    system: str,
+    human: str,
     model: str | None = None,
-    base_url: str | None = None,
-) -> BaseChatModel:
-    """Return an LLM instance with per-call overrides for temperature, model, base_url."""
-    provider = os.getenv("LLM_PROVIDER", "ollama")
+) -> str:
+    """Send a system+human message pair and return the model response.
 
-    if provider == "gemini":
-        from langchain_google_genai import ChatGoogleGenerativeAI
+    Legacy helper — prefer ``LLMClient`` + ``ChatPromptTemplate`` for new code.
 
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            raise OSError("GOOGLE_API_KEY is required when LLM_PROVIDER=gemini")
-        return ChatGoogleGenerativeAI(
-            model=model or os.getenv("GEMINI_MODEL", "gemini-1.5-flash"),
-            google_api_key=api_key,
-            temperature=temperature,
-        )
+    Args:
+        system: The system-role prompt.
+        human:  The user-context prompt.
+        model:  Optional Ollama model override (ignored when provider is Gemini).
 
-    from langchain_ollama import ChatOllama
-
-    resolved_url = base_url or os.getenv("OLLAMA_BASE_URL", DEFAULT_BASE_URL)
-    resolved_model = model or os.getenv("OLLAMA_MODEL", DEFAULT_MODEL)
-
-    logger.info(f"LLM: {resolved_model} @ {resolved_url} (temp={temperature})")
-
-    return ChatOllama(
-        base_url=resolved_url,
-        model=resolved_model,
-        temperature=temperature,
-    )
-
-
-def get_embeddings(
-    model: str | None = None,
-    base_url: str | None = None,
-):
-    """Return the Ollama embeddings model (for ChromaDB / RAG)."""
-    from langchain_ollama import OllamaEmbeddings
-
-    resolved_url = base_url or os.getenv("OLLAMA_BASE_URL", DEFAULT_BASE_URL)
-    resolved_model = model or os.getenv("OLLAMA_EMBED_MODEL", DEFAULT_EMBED_MODEL)
-
-    return OllamaEmbeddings(
-        base_url=resolved_url,
-        model=resolved_model,
-    )
-
-
-# ──────────────────────────── Health check ─────────────────────────────────
-
-
-def check_ollama_health(base_url: str | None = None) -> bool:
-    """Check whether the Ollama server is reachable."""
-    import urllib.error
-    import urllib.request
-
-    url = base_url or os.getenv("OLLAMA_BASE_URL", DEFAULT_BASE_URL)
+    Raises:
+        RuntimeError: On any LLM / network failure.
+    """
+    llm = LLMClient._build(model or _TEXT_MODEL)
+    messages = [SystemMessage(content=system), HumanMessage(content=human)]
     try:
-        req = urllib.request.Request(f"{url}/api/tags", method="GET")
-        with urllib.request.urlopen(req, timeout=5):
-            return True
-    except (urllib.error.URLError, OSError) as e:
-        logger.warning(f"Ollama unreachable at {url}: {e}")
-        return False
+        response = llm.invoke(messages)
+        return str(response.content)
+    except Exception as exc:
+        resolved = model or _TEXT_MODEL
+        raise RuntimeError(
+            f"LLM call failed (model={resolved!r}, provider={_PROVIDER!r}): {exc}"
+        ) from exc
 
 
-def list_local_models(base_url: str | None = None) -> list[str]:
-    """Retrieve the list of models already pulled in Ollama."""
-    import json
-    import urllib.request
+def call_llm(prompt: str, model: str | None = None) -> str:
+    """Send a single prompt string and return the model response.
 
-    url = base_url or os.getenv("OLLAMA_BASE_URL", DEFAULT_BASE_URL)
-    try:
-        req = urllib.request.Request(f"{url}/api/tags", method="GET")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode())
-            return [m["name"] for m in data.get("models", [])]
-    except Exception as e:
-        logger.warning(f"Unable to list Ollama models: {e}")
-        return []
-
-
-# ──────────────────────────── LangFuse ─────────────────────────────────────
-
-
-def get_langfuse_handler():
-    """Return the LangFuse callback handler, or None if unconfigured."""
-    try:
-        from langfuse.callback import CallbackHandler
-
-        public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
-        secret_key = os.getenv("LANGFUSE_SECRET_KEY")
-
-        if not public_key or not secret_key:
-            logger.info("LangFuse not configured (missing keys), monitoring disabled")
-            return None
-
-        return CallbackHandler(
-            public_key=public_key,
-            secret_key=secret_key,
-            host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
-        )
-    except Exception as e:
-        logger.warning(f"LangFuse unavailable ({e}), monitoring disabled")
-        return None
+    Legacy helper — prefer ``LLMClient`` + ``ChatPromptTemplate`` for new code.
+    """
+    return call_llm_with_messages(system="", human=prompt, model=model)

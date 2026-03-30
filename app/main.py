@@ -1,4 +1,4 @@
-"""AutoInsight AI — Streamlit application entry point (P1: Profiler UI)."""
+"""AutoInsight AI — Streamlit application entry point (P1: Profiler UI + P2: Analyst UI)."""
 
 import os
 import sys
@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
+from agents.analyst import AnalystAgent
 from agents.profiler import ProfilerAgent
 from tools.data_loader import DataLoader, UnsupportedFormatError
 from tools.profiler_engine import DataProfile, DataProfiler
@@ -20,6 +21,57 @@ load_dotenv()
 
 _APP_TITLE = os.getenv("APP_TITLE", "AutoInsight AI")
 _SAMPLE_ROWS = int(os.getenv("PROFILER_SAMPLE_ROWS", "5"))
+
+
+# ---------------------------------------------------------------------------
+# Helpers: bridge DataProfile → analyst input
+# ---------------------------------------------------------------------------
+
+
+def _profile_to_dict(profile: DataProfile) -> dict:
+    """Convert a DataProfile object to the dict format expected by AnalystAgent."""
+    columns_list = []
+    missing_values = {}
+
+    for col_name, cp in profile.columns.items():
+        col_info = {
+            "name": col_name,
+            "dtype": str(cp.dtype),
+            "missing": round(cp.missing_pct * profile.shape[0] / 100) if cp.missing_pct else 0,
+            "missing_pct": round(cp.missing_pct, 1),
+            "unique": cp.unique_count,
+        }
+
+        if cp.dtype_category == "numeric":
+            col_info["stats"] = {
+                "mean": cp.mean,
+                "std": cp.std,
+                "min": cp.min,
+                "25%": cp.q25,
+                "50%": cp.median,
+                "75%": cp.q75,
+                "max": cp.max,
+            }
+        elif cp.top_values:
+            col_info["top_values"] = cp.top_values
+
+        columns_list.append(col_info)
+
+        if cp.missing_pct and cp.missing_pct > 0:
+            missing_values[col_name] = col_info["missing"]
+
+    return {
+        "shape": {"rows": profile.shape[0], "cols": profile.shape[1]},
+        "columns": columns_list,
+        "missing_values": missing_values,
+        "duplicates": profile.duplicates_count,
+        "memory_mb": profile.memory_mb,
+    }
+
+
+def _build_sample_text(df: pd.DataFrame, n: int = 5) -> str:
+    """Build a text representation of the first n rows."""
+    return df.head(n).to_string()
 
 
 # ---------------------------------------------------------------------------
@@ -73,10 +125,12 @@ def main() -> None:
     with st.spinner("Computing profile…"):
         profile = profiler.profile(df)
 
-    # Reset AI description when a different file is uploaded
+    # Reset AI state when a different file is uploaded
     if st.session_state.get("last_file") != uploaded_file.name:
         st.session_state["last_file"] = uploaded_file.name
         st.session_state["ai_description"] = None
+        st.session_state["analyst_insights"] = None
+        st.session_state["analyst_markdown"] = None
 
     # ---- KPI row ----
     _render_kpi_row(profile)
@@ -84,8 +138,8 @@ def main() -> None:
     st.divider()
 
     # ---- Tabs ----
-    tab_overview, tab_columns, tab_sample, tab_ai = st.tabs(
-        ["📊 Overview", "📋 Columns", "🗂️ Sample Data", "🤖 AI Analysis"]
+    tab_overview, tab_columns, tab_sample, tab_ai, tab_insights = st.tabs(
+        ["📊 Overview", "📋 Columns", "🗂️ Sample Data", "🤖 AI Analysis", "💡 Insights"]
     )
 
     with tab_overview:
@@ -100,9 +154,12 @@ def main() -> None:
     with tab_ai:
         _render_ai_analysis(profile, enable_ai)
 
+    with tab_insights:
+        _render_insights(df, profile, enable_ai)
+
 
 # ---------------------------------------------------------------------------
-# Rendering helpers
+# Rendering helpers (existing)
 # ---------------------------------------------------------------------------
 
 
@@ -114,6 +171,7 @@ def _render_landing() -> None:
         - **Instant profile** — shape, column types, missing values, duplicates, statistics
         - **Column-level analysis** — distributions, top values, numeric stats
         - **AI-powered description** — structured markdown report from an LLM
+        - **Automated insights** — trend, anomaly, correlation, and distribution detection
         """
     )
 
@@ -215,6 +273,161 @@ def _render_ai_analysis(profile: DataProfile, enable_ai: bool) -> None:
         st.markdown(st.session_state["ai_description"])
     else:
         st.caption("Click **Generate AI Analysis** to produce an LLM-powered report.")
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Insights tab
+# ---------------------------------------------------------------------------
+
+# Category colors for the badge-like display
+_CATEGORY_COLORS = {
+    "trend": "#2196F3",
+    "anomaly": "#FF5722",
+    "correlation": "#9C27B0",
+    "distribution": "#4CAF50",
+    "general": "#607D8B",
+}
+
+_CATEGORY_ICONS = {
+    "trend": "📈",
+    "anomaly": "⚠️",
+    "correlation": "🔗",
+    "distribution": "📊",
+    "general": "💡",
+}
+
+_PRIORITY_COLORS = {
+    "high": "🔴",
+    "medium": "🟡",
+    "low": "🟢",
+}
+
+
+def _render_insights(df: pd.DataFrame, profile: DataProfile, enable_ai: bool) -> None:
+    """Render the Phase 2 Insights tab."""
+    if not enable_ai:
+        st.info("Enable **AI Analysis** in the sidebar to use this feature.")
+        return
+
+    # Check if profiler AI analysis exists (used as input)
+    profiler_output = st.session_state.get("ai_description")
+
+    if not profiler_output:
+        st.warning(
+            "Please generate the **AI Analysis** first (previous tab). "
+            "The Analyst agent needs the profiler output as input."
+        )
+        return
+
+    if st.button("🔍 Generate Insights", type="primary", key="btn_insights"):
+        profile_data = _profile_to_dict(profile)
+        sample_text = _build_sample_text(df)
+
+        agent = AnalystAgent(temperature=0.5)
+
+        with st.spinner("Generating insights… this may take a moment."):
+            try:
+                result = agent.run(
+                    profiler_output=profiler_output,
+                    sample_text=sample_text,
+                    profile_data=profile_data,
+                )
+
+                if result.get("error"):
+                    st.error(f"Insight generation failed: {result['error']}")
+                    return
+
+                st.session_state["analyst_insights"] = result.get("insights", [])
+                st.session_state["analyst_markdown"] = result.get("analyst_output", "")
+
+            except Exception as exc:
+                st.error(f"Insight generation failed: {exc}")
+                st.info("Make sure Ollama is running locally (`ollama serve`).")
+                return
+
+    # ---- Display insights ----
+    insights = st.session_state.get("analyst_insights")
+    markdown = st.session_state.get("analyst_markdown")
+
+    if not insights:
+        st.caption("Click **Generate Insights** to produce AI-powered data insights.")
+        return
+
+    # Summary metrics
+    _render_insight_summary(insights)
+
+    st.divider()
+
+    # View toggle
+    view_mode = st.radio(
+        "Display mode",
+        ["Cards", "Markdown"],
+        horizontal=True,
+        key="insight_view_mode",
+    )
+
+    if view_mode == "Cards":
+        _render_insight_cards(insights)
+    else:
+        st.markdown(markdown)
+
+
+def _render_insight_summary(insights: list[dict]) -> None:
+    """Render summary KPI row for insights."""
+    total = len(insights)
+    high = sum(1 for i in insights if i.get("priority") == "high")
+    medium = sum(1 for i in insights if i.get("priority") == "medium")
+    low = sum(1 for i in insights if i.get("priority") == "low")
+
+    # Count categories
+    categories = {}
+    for ins in insights:
+        cat = ins.get("category", "general")
+        categories[cat] = categories.get(cat, 0) + 1
+
+    cols = st.columns(4)
+    cols[0].metric("Total Insights", total)
+    cols[1].metric("🔴 High Priority", high)
+    cols[2].metric("🟡 Medium Priority", medium)
+    cols[3].metric("🟢 Low Priority", low)
+
+    # Category breakdown
+    if categories:
+        cat_text = " · ".join(
+            f"{_CATEGORY_ICONS.get(cat, '💡')} {cat.capitalize()}: {count}"
+            for cat, count in categories.items()
+        )
+        st.caption(f"**Categories**: {cat_text}")
+
+
+def _render_insight_cards(insights: list[dict]) -> None:
+    """Render each insight as an expandable card."""
+    # Group by category
+    by_category: dict[str, list[dict]] = {}
+    for insight in insights:
+        cat = insight.get("category", "general")
+        by_category.setdefault(cat, []).append(insight)
+
+    for category, cat_insights in by_category.items():
+        icon = _CATEGORY_ICONS.get(category, "💡")
+        st.subheader(f"{icon} {category.capitalize()}")
+
+        for insight in cat_insights:
+            priority_icon = _PRIORITY_COLORS.get(insight.get("priority", "medium"), "⚪")
+            header = f"{priority_icon} {insight['title']}"
+
+            with st.expander(header, expanded=True):
+                st.markdown(f"**Observation**: {insight.get('observation', 'N/A')}")
+                st.markdown(f"**Hypothesis**: {insight.get('hypothesis', 'N/A')}")
+                st.markdown(f"**Recommendation**: {insight.get('recommendation', 'N/A')}")
+
+                tag_cols = st.columns(2)
+                tag_cols[0].caption(
+                    f"Priority: **{insight.get('priority', 'medium').capitalize()}**"
+                )
+                tag_cols[1].caption(
+                    f"Category: **{insight.get('category', 'general').capitalize()}**"
+                )
 
 
 if __name__ == "__main__":

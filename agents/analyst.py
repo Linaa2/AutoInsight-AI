@@ -25,9 +25,8 @@ from pathlib import Path
 from typing import ClassVar
 
 import yaml
-from langchain_core.messages import HumanMessage, SystemMessage
 
-from utils.llm import get_langfuse_handler, get_llm
+from utils.llm import call_llm_with_messages
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +37,10 @@ logger = logging.getLogger(__name__)
 
 
 def _load_prompts() -> dict:
-    """Load prompts from prompts.yaml at project root."""
+    """Load prompts from config/prompts.yaml."""
     candidates = [
-        Path(__file__).resolve().parent.parent / "prompts.yaml",
-        Path.cwd() / "prompts.yaml",
+        Path(__file__).resolve().parent.parent / "config" / "prompts.yaml",
+        Path.cwd() / "config" / "prompts.yaml",
     ]
     for path in candidates:
         if path.exists():
@@ -225,14 +224,12 @@ class InsightCategorizer:
         "general",
     }
 
-    def __init__(self, use_llm: bool = False, model: str | None = None):
+    def __init__(self, use_llm: bool = False):
         """
         Args:
             use_llm: If True, use LLM for categorization (more accurate, slower).
-            model: Optional Ollama model override.
         """
         self.use_llm = use_llm
-        self.model = model
 
     def categorize(self, insight: dict) -> str:
         """Assign a category to a single insight."""
@@ -264,25 +261,13 @@ class InsightCategorizer:
     def _categorize_with_llm(self, insight: dict) -> str:
         """Categorize using LLM with fallback to keywords on failure."""
         try:
-            llm = get_llm(temperature=0.0, model=self.model)
-            handler = get_langfuse_handler()
-
             system_prompt = PROMPTS["categorizer"]["system"]
             human_prompt = PROMPTS["categorizer"]["human"].format(
                 insight_json=json.dumps(insight, ensure_ascii=False, indent=2)
             )
 
-            messages = [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=human_prompt),
-            ]
-
-            config = {}
-            if handler:
-                config["callbacks"] = [handler]
-
-            response = llm.invoke(messages, config=config)
-            cat = response.content.strip().lower().replace('"', "").replace("'", "")
+            raw = call_llm_with_messages(system=system_prompt, human=human_prompt)
+            cat = raw.strip().lower().replace('"', "").replace("'", "")
 
             return cat if cat in self.VALID_CATEGORIES else self._categorize_by_keywords(insight)
 
@@ -359,32 +344,24 @@ class AnalystAgent:
 
     Workflow:
         1. Build context from profiler output, profile data, and sample.
-        2. Call LLM to generate raw insights (JSON).
+        2. Call LLM (text model) to generate raw insights (JSON).
         3. Parse and validate the response.
         4. Categorize each insight.
         5. Format as markdown.
 
     Usage:
-        agent = AnalystAgent(model="mistral", temperature=0.5)
+        agent = AnalystAgent()
         result = agent.run(profiler_output, sample_text, profile_data)
         # result = {"analyst_output": str, "insights": list[dict]}
     """
 
-    def __init__(
-        self,
-        model: str | None = None,
-        temperature: float = 0.5,
-        use_llm_categorization: bool = False,
-    ):
+    def __init__(self, use_llm_categorization: bool = False):
         """
         Args:
-            model: Ollama model name (None = use env default).
-            temperature: LLM generation temperature.
-            use_llm_categorization: Use LLM for insight categorization.
+            use_llm_categorization: Use LLM for insight categorization
+                                    (slower but more accurate).
         """
-        self.model = model
-        self.temperature = temperature
-        self.categorizer = InsightCategorizer(use_llm=use_llm_categorization, model=model)
+        self.categorizer = InsightCategorizer(use_llm=use_llm_categorization)
         self.formatter = InsightFormatter()
 
     def run(
@@ -430,10 +407,7 @@ class AnalystAgent:
         sample_text: str,
         profile_data: dict | None = None,
     ) -> list[dict]:
-        """Call the LLM to generate raw insights."""
-        llm = get_llm(temperature=self.temperature, model=self.model)
-        handler = get_langfuse_handler()
-
+        """Call the LLM (text model) to generate raw insights."""
         shape = profile_data.get("shape", {}) if profile_data else {}
         missing = profile_data.get("missing_values", {}) if profile_data else {}
 
@@ -446,17 +420,10 @@ class AnalystAgent:
             sample_text=sample_text,
         )
 
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=human_prompt),
-        ]
+        # Use the team's call_llm_with_messages (text model by default)
+        raw = call_llm_with_messages(system=system_prompt, human=human_prompt)
 
-        config = {}
-        if handler:
-            config["callbacks"] = [handler]
-
-        response = llm.invoke(messages, config=config)
-        return self._parse_response(response.content)
+        return self._parse_response(raw)
 
     def _parse_response(self, raw: str) -> list[dict]:
         """Parse LLM response into validated insight dicts."""
