@@ -106,9 +106,8 @@ analyst:
     - If the dataset contains date-like columns, suggest temporal trend analysis.
     - Return ONLY the JSON object, nothing else.
 
-
-categorizer:
-  system: |
+  # Sub-prompt used internally by InsightCategorizer._categorize_with_llm()
+  categorizer_system: |
     You are an expert in data insight classification. You receive a single insight
     as a JSON object and must assign it exactly ONE category.
 
@@ -124,7 +123,7 @@ categorizer:
     - If the insight spans multiple categories, pick the dominant one.
     - When in doubt, prefer the more specific category over "general".
 
-  human: |
+  categorizer_human: |
     Classify the following insight into one category:
 
     ```json

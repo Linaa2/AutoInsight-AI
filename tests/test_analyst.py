@@ -8,6 +8,8 @@ Run from the project root:
 import sys
 from pathlib import Path
 
+import pytest
+
 # Fix import: add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -198,6 +200,7 @@ def test_formatter_empty():
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.integration
 def test_analyst_agent_with_llm():
     """Test the full AnalystAgent pipeline with Ollama."""
     from utils.llm import check_ollama_health
@@ -253,6 +256,7 @@ def test_analyst_agent_with_llm():
     return True
 
 
+@pytest.mark.integration
 def test_analyst_node_with_llm():
     """Test the LangGraph node entry point."""
     from utils.llm import check_ollama_health
