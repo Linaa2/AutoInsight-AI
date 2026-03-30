@@ -131,6 +131,79 @@ analyst:
     ```
 
 
+evaluation:
+  judge:
+    system: |
+      You are a rigorous evaluator of AI-generated data analysis outputs.
+      You will be given an artifact and a pre-computed validation report produced
+      by deterministic checks (column references, section presence, stat accuracy).
+
+      Your job is to score the artifact against the provided rubric criteria.
+
+      Rules:
+      - Be strict, precise, and grounded.
+      - Only reference what is actually present in the artifact.
+      - Do not invent or assume facts not shown.
+      - Penalise vague, generic, or unsupported statements.
+      - Each criterion score must be a float between 0.0 and 1.0.
+      - Return ONLY a valid JSON object — no markdown, no backticks, no extra text.
+
+    human: |
+      ## Artifact Type: {artifact_type}
+
+      ## Rubric Criteria (score each 0.0–1.0):
+      {rubric_json}
+
+      ## Pre-computed Validation Report (ground-truth facts — trust these):
+      {validation_report_json}
+
+      ## Upstream Context (e.g. analyst output used to judge faithfulness of reporter):
+      {context}
+
+      ## Artifact to Evaluate:
+      {artifact}
+
+      ## Required JSON Output:
+      {{
+        "<criterion_name>": {{"score": 0.0, "rationale": "one sentence"}},
+        ...
+        "overall_critique": "2-4 sentence overall assessment",
+        "suggestions": ["specific improvement 1", "specific improvement 2"]
+      }}
+
+    analyst_human: |
+      ## Artifact Type: analyst insights
+
+      ## Rubric Criteria (score each 0.0–1.0):
+      {rubric_json}
+
+      ## Pre-computed Validation Report (ground-truth facts — trust these):
+      {validation_report_json}
+
+      ## Artifact to Evaluate (JSON array of insights):
+      {artifact}
+
+      ## Required JSON Output — include both aggregate scores AND per-insight scores:
+      {{
+        "factual_correctness": {{"score": 0.0, "rationale": "one sentence"}},
+        "relevance":           {{"score": 0.0, "rationale": "one sentence"}},
+        "actionability":       {{"score": 0.0, "rationale": "one sentence"}},
+        "priority_calibration":{{"score": 0.0, "rationale": "one sentence"}},
+        "diversity":           {{"score": 0.0, "rationale": "one sentence"}},
+        "per_insight": [
+          {{
+            "title": "exact insight title",
+            "factual_correctness": 0.0,
+            "relevance": 0.0,
+            "actionability": 0.0,
+            "note": "one sentence observation"
+          }}
+        ],
+        "overall_critique": "2-4 sentence overall assessment",
+        "suggestions": ["specific improvement 1", "specific improvement 2"]
+      }}
+
+
 reporter:
   system: |
     You are a professional data analysis report writer. Your job is to synthesize

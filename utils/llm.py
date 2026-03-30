@@ -1,8 +1,8 @@
 """LLM client factory for AutoInsight-AI.
 
 Supports Ollama (primary, local) and Gemini (optional cloud fallback).
-Model selection is task-aware: use the text model for profiler/analyst/reporter
-and the code model for visualizer/text-to-code agents.
+Model selection is task-aware: use the text model for profiler/analyst/reporter,
+the code model for visualizer/text-to-code, and the judge model for evaluation.
 
 Configuration (environment variables)::
 
@@ -10,6 +10,7 @@ Configuration (environment variables)::
     OLLAMA_BASE_URL    = http://localhost:11434
     OLLAMA_TEXT_MODEL  = qwen3:14b
     OLLAMA_CODE_MODEL  = qwen2.5-coder:14b
+    EVAL_JUDGE_MODEL   = qwen3:14b       # model used by EvaluationAgent
     LLM_TIMEOUT        = 60
 
 Apple Silicon note: Ollama manages Metal (MPS) acceleration internally.
@@ -38,6 +39,7 @@ _PROVIDER: str = os.getenv("LLM_PROVIDER", "ollama")
 _HOST: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 _TEXT_MODEL: str = os.getenv("OLLAMA_TEXT_MODEL", "qwen3:14b")
 _CODE_MODEL: str = os.getenv("OLLAMA_CODE_MODEL", "qwen2.5-coder:14b")
+_JUDGE_MODEL: str = os.getenv("EVAL_JUDGE_MODEL", os.getenv("OLLAMA_TEXT_MODEL", "qwen3:14b"))
 _TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "60"))
 _GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
@@ -79,6 +81,16 @@ class LLMClient:
         Default model: ``OLLAMA_CODE_MODEL`` env var (qwen2.5-coder:14b).
         """
         return LLMClient._build(_CODE_MODEL)
+
+    @staticmethod
+    def get_judge_llm() -> BaseChatModel:
+        """Return a chat model for evaluation/judging tasks.
+
+        Uses ``EVAL_JUDGE_MODEL`` env var (defaults to ``OLLAMA_TEXT_MODEL``).
+        Evaluation is a text-reasoning task — ``qwen3:14b`` is preferred over
+        the code model.
+        """
+        return LLMClient._build(_JUDGE_MODEL)
 
     @staticmethod
     def get_llm(kind: Literal["text", "code"] = "text") -> BaseChatModel:
@@ -153,3 +165,19 @@ def call_llm(prompt: str, model: str | None = None) -> str:
     Legacy helper — prefer ``LLMClient`` + ``ChatPromptTemplate`` for new code.
     """
     return call_llm_with_messages(system="", human=prompt, model=model)
+
+
+def check_ollama_health(base_url: str | None = None) -> bool:
+    """Return True if the Ollama server is reachable, False otherwise.
+
+    Args:
+        base_url: Ollama base URL (defaults to ``OLLAMA_BASE_URL`` env var).
+    """
+    import urllib.request
+
+    url = (base_url or _HOST).rstrip("/") + "/api/tags"
+    try:
+        with urllib.request.urlopen(url, timeout=3):
+            return True
+    except Exception:
+        return False

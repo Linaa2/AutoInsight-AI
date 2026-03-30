@@ -1,4 +1,4 @@
-"""AutoInsight AI — Streamlit application entry point (P1: Profiler UI + P2: Analyst UI + P3: Reporter UI)."""
+"""AutoInsight AI - Streamlit application entry point (P1-P3: Profiler/Analyst/Reporter + P7: Evaluation UI)."""
 
 import os
 import sys
@@ -13,7 +13,9 @@ from dotenv import load_dotenv
 
 from agents.analyst import AnalystAgent
 from agents.profiler import ProfilerAgent
-from agents.reporter import ReporterAgent  # ✅ NEW
+from agents.reporter import ReporterAgent
+from evaluation.llm_judge import EvaluationAgent
+from evaluation.schemas import AnalystEvaluationResult, EvaluationResult, PipelineEvaluation
 from tools.data_loader import DataLoader, UnsupportedFormatError
 from tools.profiler_engine import DataProfile, DataProfiler
 
@@ -131,7 +133,8 @@ def main() -> None:
         st.session_state["ai_description"] = None
         st.session_state["analyst_insights"] = None
         st.session_state["analyst_markdown"] = None
-        st.session_state["reporter_output"] = None  # ✅ NEW
+        st.session_state["reporter_output"] = None
+        st.session_state["pipeline_eval"] = None  # auto-invalidate on new file
 
     # ---- KPI row ----
     _render_kpi_row(profile)
@@ -139,8 +142,16 @@ def main() -> None:
     st.divider()
 
     # ---- Tabs ----
-    tab_overview, tab_columns, tab_sample, tab_ai, tab_insights, tab_report = st.tabs(
-        ["📊 Overview", "📋 Columns", "🗂️ Sample Data", "🤖 AI Analysis", "💡 Insights", "📄 Report"]
+    tab_overview, tab_columns, tab_sample, tab_ai, tab_insights, tab_report, tab_eval = st.tabs(
+        [
+            "📊 Overview",
+            "📋 Columns",
+            "🗂️ Sample Data",
+            "🤖 AI Analysis",
+            "💡 Insights",
+            "📄 Report",
+            "🔍 Evaluation",
+        ]
     )
 
     with tab_overview:
@@ -160,6 +171,9 @@ def main() -> None:
 
     with tab_report:
         _render_report(enable_ai)
+
+    with tab_eval:
+        _render_evaluation(profile, enable_ai)
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +344,141 @@ def _render_report(enable_ai: bool) -> None:
         file_name="analysis_report.md",
         mime="text/markdown",
     )
+
+
+# ---------------------------------------------------------------------------
+# Evaluation (P7)
+# ---------------------------------------------------------------------------
+
+_GRADE_COLORS = {
+    "excellent": "🟢",
+    "good": "🔵",
+    "fair": "🟠",
+    "poor": "🔴",
+}
+
+
+def _score_bar(label: str, score: float) -> None:
+    """Render a labelled progress bar for a single criterion score."""
+    grade_icon = _GRADE_COLORS.get(EvaluationResult.compute_grade(score), "⚪")
+    st.write(f"**{label}** {grade_icon} `{score:.2f}`")
+    st.progress(score)
+
+
+def _render_artifact_panel(title: str, result: EvaluationResult) -> None:
+    """Render one agent evaluation panel inside a Streamlit column."""
+    grade_icon = _GRADE_COLORS.get(result.grade, "⚪")
+    st.metric(
+        label=title,
+        value=f"{result.overall_score:.2f}",
+        delta=result.grade,
+    )
+    st.caption(f"{grade_icon} {result.grade.capitalize()}")
+
+    for criterion in result.criteria:
+        _score_bar(criterion.label, criterion.score)
+        if criterion.rationale:
+            st.caption(criterion.rationale)
+
+    if result.critique:
+        st.write("**Critique:**", result.critique)
+
+    if result.suggestions:
+        st.write("**Suggestions:**")
+        for s in result.suggestions:
+            st.write(f"- {s}")
+
+    # Per-insight table for analyst results
+    if isinstance(result, AnalystEvaluationResult) and result.per_insight:
+        with st.expander("Per-insight scores", expanded=False):
+            rows = [
+                {
+                    "Insight": ins.title,
+                    "Factual": round(ins.factual_correctness, 2),
+                    "Relevance": round(ins.relevance, 2),
+                    "Actionability": round(ins.actionability, 2),
+                    "Note": ins.note,
+                }
+                for ins in result.per_insight
+            ]
+            st.dataframe(rows, use_container_width=True)
+
+
+def _render_evaluation(profile: DataProfile, enable_ai: bool) -> None:
+    if not enable_ai:
+        st.info("Enable **AI Analysis** in the sidebar to use this feature.")
+        return
+
+    profiler_output = st.session_state.get("ai_description")
+    analyst_insights = st.session_state.get("analyst_insights")
+    analyst_markdown = st.session_state.get("analyst_markdown")
+    reporter_output = st.session_state.get("reporter_output")
+
+    has_any = any([profiler_output, analyst_insights, reporter_output])
+
+    if not has_any:
+        st.info(
+            "Run at least one pipeline step (AI Analysis, Insights, or Report) before evaluating."
+        )
+        return
+
+    if st.button("🔍 Run Evaluation", type="primary", key="btn_eval"):
+        agent = EvaluationAgent()
+        pipeline_eval = PipelineEvaluation()
+
+        with st.spinner("Evaluating pipeline outputs… this may take a moment."):
+            if profiler_output:
+                try:
+                    pipeline_eval.profiler_eval = agent.evaluate_profiler(profiler_output, profile)
+                except Exception as exc:
+                    st.error(f"Profiler evaluation failed: {exc}")
+
+            if analyst_insights:
+                try:
+                    pipeline_eval.analyst_eval = agent.evaluate_analyst(analyst_insights, profile)
+                except Exception as exc:
+                    st.error(f"Analyst evaluation failed: {exc}")
+
+            if reporter_output and analyst_markdown:
+                try:
+                    pipeline_eval.reporter_eval = agent.evaluate_reporter(
+                        reporter_output, analyst_markdown
+                    )
+                except Exception as exc:
+                    st.error(f"Reporter evaluation failed: {exc}")
+
+        st.session_state["pipeline_eval"] = pipeline_eval
+
+    pipeline_eval: PipelineEvaluation | None = st.session_state.get("pipeline_eval")
+
+    if pipeline_eval is None:
+        st.caption("Click **Run Evaluation** to score all available pipeline outputs.")
+        return
+
+    # ---- Pipeline-level score ----
+    st.divider()
+    pipeline_score = pipeline_eval.pipeline_score
+    grade_icon = _GRADE_COLORS.get(pipeline_eval.pipeline_grade, "⚪")
+    st.subheader(f"Pipeline Score: {pipeline_score:.2f} {grade_icon}")
+    st.progress(pipeline_score)
+    st.divider()
+
+    # ---- Per-agent panels ----
+    evals = [
+        ("Profiler Quality", pipeline_eval.profiler_eval),
+        ("Analyst Quality", pipeline_eval.analyst_eval),
+        ("Reporter Quality", pipeline_eval.reporter_eval),
+    ]
+    available = [(title, res) for title, res in evals if res is not None]
+
+    if not available:
+        st.warning("No evaluation results available.")
+        return
+
+    cols = st.columns(len(available))
+    for col, (title, result) in zip(cols, available):
+        with col:
+            _render_artifact_panel(title, result)
 
 
 if __name__ == "__main__":
