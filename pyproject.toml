@@ -102,3 +102,8 @@ include = ["agents*", "app*", "config*", "evaluation*", "graph*", "tools*", "uti
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "types-pyyaml>=6.0.12.20250915",
+]
