@@ -33,6 +33,7 @@ dependencies = [
     "pandas>=2.0.0",
     "numpy>=1.26.0",
     "openpyxl>=3.1.0",
+    "pyarrow>=14.0.0",
 
     # Visualization
     "plotly>=5.20.0",
@@ -94,3 +95,13 @@ mypy_path = ["."]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agents*", "app*", "config*", "evaluation*", "graph*", "tools*", "utils*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+
