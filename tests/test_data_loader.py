@@ -1,7 +1,9 @@
 """Tests for tools.data_loader."""
 
-import pytest
+from pathlib import Path
+
 import pandas as pd
+import pytest
 
 from tools.data_loader import DataLoader, UnsupportedFormatError
 
@@ -42,7 +44,7 @@ class TestDataLoader:
     # ------------------------------------------------------------------
 
     def test_load_from_upload_csv(self, sample_csv_file, sample_df):
-        with open(sample_csv_file, "rb") as fh:
+        with Path(sample_csv_file).open("rb") as fh:
             raw = fh.read()
         df = DataLoader().load_from_upload(raw, "sample.csv")
         assert isinstance(df, pd.DataFrame)

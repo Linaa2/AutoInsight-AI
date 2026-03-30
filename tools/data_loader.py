@@ -2,14 +2,13 @@
 
 import io
 import os
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import Union
 
 import pandas as pd
 
 
-class FileFormat(str, Enum):
+class FileFormat(StrEnum):
     CSV = "csv"
     EXCEL = "excel"
     PARQUET = "parquet"
@@ -38,15 +37,13 @@ class DataLoader:
     def __init__(self) -> None:
         sheet_env = os.getenv("DATA_LOADER_EXCEL_SHEET", "0")
         # Use integer index when the env value is purely numeric, else treat as sheet name.
-        self._excel_sheet: Union[int, str] = (
-            int(sheet_env) if sheet_env.isdigit() else sheet_env
-        )
+        self._excel_sheet: int | str = int(sheet_env) if sheet_env.isdigit() else sheet_env
 
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
-    def load(self, file_path: Union[str, Path]) -> pd.DataFrame:
+    def load(self, file_path: str | Path) -> pd.DataFrame:
         """Load a DataFrame from a file on disk.
 
         Raises:
@@ -85,9 +82,7 @@ class DataLoader:
             )
         return SUPPORTED_EXTENSIONS[ext]
 
-    def _dispatch(
-        self, fmt: FileFormat, source: Union[Path, io.BytesIO]
-    ) -> pd.DataFrame:
+    def _dispatch(self, fmt: FileFormat, source: Path | io.BytesIO) -> pd.DataFrame:
         if fmt == FileFormat.CSV:
             return self._load_csv(source)
         if fmt == FileFormat.EXCEL:
@@ -96,12 +91,12 @@ class DataLoader:
             return self._load_parquet(source)
         raise UnsupportedFormatError(f"No loader registered for format: {fmt}")
 
-    def _load_csv(self, source: Union[Path, io.BytesIO]) -> pd.DataFrame:
+    def _load_csv(self, source: Path | io.BytesIO) -> pd.DataFrame:
         # sep=None + engine="python" enables automatic delimiter detection.
         return pd.read_csv(source, sep=None, engine="python")
 
-    def _load_excel(self, source: Union[Path, io.BytesIO]) -> pd.DataFrame:
+    def _load_excel(self, source: Path | io.BytesIO) -> pd.DataFrame:
         return pd.read_excel(source, sheet_name=self._excel_sheet)
 
-    def _load_parquet(self, source: Union[Path, io.BytesIO]) -> pd.DataFrame:
+    def _load_parquet(self, source: Path | io.BytesIO) -> pd.DataFrame:
         return pd.read_parquet(source)

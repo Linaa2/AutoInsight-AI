@@ -5,13 +5,12 @@ distributions, and sample rows — all without any LLM involvement.
 """
 
 import os
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from typing import Any
 
 import numpy as np
 import pandas as pd
-
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -31,32 +30,32 @@ class ColumnProfile:
     unique_pct: float
 
     # --- Numeric ---
-    min: Optional[float] = None
-    max: Optional[float] = None
-    mean: Optional[float] = None
-    median: Optional[float] = None
-    std: Optional[float] = None
-    q25: Optional[float] = None
-    q75: Optional[float] = None
-    skewness: Optional[float] = None
-    kurtosis: Optional[float] = None
-    zeros_count: Optional[int] = None
-    zeros_pct: Optional[float] = None
+    min: float | None = None
+    max: float | None = None
+    mean: float | None = None
+    median: float | None = None
+    std: float | None = None
+    q25: float | None = None
+    q75: float | None = None
+    skewness: float | None = None
+    kurtosis: float | None = None
+    zeros_count: int | None = None
+    zeros_pct: float | None = None
 
     # --- Categorical / Boolean ---
-    top_values: Optional[Dict[str, int]] = None
+    top_values: dict[str, int] | None = None
 
     # --- Datetime ---
-    min_date: Optional[str] = None
-    max_date: Optional[str] = None
-    date_range_days: Optional[int] = None
+    min_date: str | None = None
+    max_date: str | None = None
+    date_range_days: int | None = None
 
 
 @dataclass
 class DataProfile:
     """Full deterministic profile of a DataFrame."""
 
-    shape: List[int]  # [rows, cols]
+    shape: list[int]  # [rows, cols]
     duplicates_count: int
     duplicates_pct: float
     total_missing_count: int
@@ -67,12 +66,12 @@ class DataProfile:
     datetime_cols: int
     boolean_cols: int
     other_cols: int
-    columns: Dict[str, ColumnProfile]
-    missing: Dict[str, float]   # col -> missing %
-    samples: List[Dict[str, Any]]
-    created_at: str             # ISO-8601 UTC timestamp
+    columns: dict[str, ColumnProfile]
+    missing: dict[str, float]  # col -> missing %
+    samples: list[dict[str, Any]]
+    created_at: str  # ISO-8601 UTC timestamp
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable dict matching the required output schema:
 
         {
@@ -86,11 +85,16 @@ class DataProfile:
         d = asdict(self)
         # Group all global statistics under a dedicated "stats" key
         stats_keys = [
-            "duplicates_count", "duplicates_pct",
-            "total_missing_count", "total_missing_pct",
+            "duplicates_count",
+            "duplicates_pct",
+            "total_missing_count",
+            "total_missing_pct",
             "memory_mb",
-            "numeric_cols", "categorical_cols", "datetime_cols",
-            "boolean_cols", "other_cols",
+            "numeric_cols",
+            "categorical_cols",
+            "datetime_cols",
+            "boolean_cols",
+            "other_cols",
             "created_at",
         ]
         d["stats"] = {k: d.pop(k) for k in stats_keys if k in d}
@@ -124,7 +128,7 @@ class DataProfiler:
         total_missing = int(missing_per_col.sum())
         memory_mb = round(df.memory_usage(deep=True).sum() / 1024 / 1024, 4)
 
-        columns: Dict[str, ColumnProfile] = {}
+        columns: dict[str, ColumnProfile] = {}
         dtype_counts = {
             "numeric": 0,
             "categorical": 0,
@@ -144,11 +148,7 @@ class DataProfiler:
         }
 
         # Replace NaN/NaT with None for JSON safety
-        samples = (
-            df.head(self._sample_rows)
-            .replace({np.nan: None})
-            .to_dict(orient="records")
-        )
+        samples = df.head(self._sample_rows).replace({np.nan: None}).to_dict(orient="records")
         # Ensure all keys are strings
         samples = [{str(k): v for k, v in row.items()} for row in samples]
 
@@ -158,9 +158,7 @@ class DataProfiler:
             duplicates_pct=round(duplicates_count / n_rows * 100, 2) if n_rows > 0 else 0.0,
             total_missing_count=total_missing,
             total_missing_pct=(
-                round(total_missing / (n_rows * n_cols) * 100, 2)
-                if n_rows * n_cols > 0
-                else 0.0
+                round(total_missing / (n_rows * n_cols) * 100, 2) if n_rows * n_cols > 0 else 0.0
             ),
             memory_mb=memory_mb,
             numeric_cols=dtype_counts["numeric"],
@@ -171,7 +169,7 @@ class DataProfiler:
             columns=columns,
             missing=missing,
             samples=samples,
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
         )
 
     # ------------------------------------------------------------------
@@ -183,14 +181,14 @@ class DataProfiler:
         missing_count = int(series.isnull().sum())
         unique_count = int(series.nunique())
 
-        base: Dict[str, Any] = dict(
-            name=str(series.name),
-            dtype=str(series.dtype),
-            missing_count=missing_count,
-            missing_pct=round(missing_count / n * 100, 2) if n > 0 else 0.0,
-            unique_count=unique_count,
-            unique_pct=round(unique_count / n * 100, 2) if n > 0 else 0.0,
-        )
+        base: dict[str, Any] = {
+            "name": str(series.name),
+            "dtype": str(series.dtype),
+            "missing_count": missing_count,
+            "missing_pct": round(missing_count / n * 100, 2) if n > 0 else 0.0,
+            "unique_count": unique_count,
+            "unique_pct": round(unique_count / n * 100, 2) if n > 0 else 0.0,
+        }
 
         if pd.api.types.is_bool_dtype(series):
             return ColumnProfile(
@@ -212,7 +210,7 @@ class DataProfiler:
             top_values=self._value_counts(series),
         )
 
-    def _profile_numeric(self, series: pd.Series, base: Dict[str, Any]) -> ColumnProfile:
+    def _profile_numeric(self, series: pd.Series, base: dict[str, Any]) -> ColumnProfile:
         desc = series.describe()
         n = len(series)
         zeros_count = int((series == 0).sum())
@@ -232,7 +230,7 @@ class DataProfiler:
             zeros_pct=round(zeros_count / n * 100, 2) if n > 0 else 0.0,
         )
 
-    def _profile_datetime(self, series: pd.Series, base: Dict[str, Any]) -> ColumnProfile:
+    def _profile_datetime(self, series: pd.Series, base: dict[str, Any]) -> ColumnProfile:
         valid = series.dropna()
         date_range_days = None
         min_date = max_date = None
@@ -248,14 +246,11 @@ class DataProfiler:
             date_range_days=date_range_days,
         )
 
-    def _value_counts(self, series: pd.Series) -> Dict[str, int]:
-        return {
-            str(k): int(v)
-            for k, v in series.value_counts().head(self._top_values).items()
-        }
+    def _value_counts(self, series: pd.Series) -> dict[str, int]:
+        return {str(k): int(v) for k, v in series.value_counts().head(self._top_values).items()}
 
     @staticmethod
-    def _safe_float(value: Any) -> Optional[float]:
+    def _safe_float(value: Any) -> float | None:
         """Convert *value* to float, returning None for NaN/Inf/errors."""
         try:
             f = float(value)

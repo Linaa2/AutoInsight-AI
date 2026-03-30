@@ -145,15 +145,13 @@ def _render_overview(profile: DataProfile) -> None:
 
     with col_right:
         st.subheader("Missing Values by Column")
-        missing_items = [
-            (col, pct) for col, pct in profile.missing.items() if pct > 0
-        ]
+        missing_items = [(col, pct) for col, pct in profile.missing.items() if pct > 0]
         if not missing_items:
             st.success("No missing values detected.")
         else:
-            missing_df = pd.DataFrame(
-                missing_items, columns=["Column", "Missing %"]
-            ).sort_values("Missing %", ascending=False)
+            missing_df = pd.DataFrame(missing_items, columns=["Column", "Missing %"]).sort_values(
+                "Missing %", ascending=False
+            )
             st.dataframe(missing_df, use_container_width=True, hide_index=True)
 
 
@@ -187,16 +185,11 @@ def _render_columns(profile: DataProfile) -> None:
 
             elif cp.dtype_category in ("categorical", "boolean") and cp.top_values:
                 st.caption("Top values:")
-                tv_df = pd.DataFrame(
-                    cp.top_values.items(), columns=["Value", "Count"]
-                )
+                tv_df = pd.DataFrame(cp.top_values.items(), columns=["Value", "Count"])
                 st.dataframe(tv_df, use_container_width=True, hide_index=True)
 
             elif cp.dtype_category == "datetime":
-                st.caption(
-                    f"Range: {cp.min_date} → {cp.max_date} "
-                    f"({cp.date_range_days} days)"
-                )
+                st.caption(f"Range: {cp.min_date} → {cp.max_date} ({cp.date_range_days} days)")
 
 
 def _render_ai_analysis(profile: DataProfile, enable_ai: bool) -> None:

@@ -2,11 +2,10 @@
 
 import json
 
-import numpy as np
 import pandas as pd
 import pytest
 
-from tools.profiler_engine import ColumnProfile, DataProfile, DataProfiler
+from tools.profiler_engine import DataProfile, DataProfiler
 
 
 class TestDataProfiler:
@@ -121,9 +120,7 @@ class TestDataProfiler:
     # ------------------------------------------------------------------
 
     def test_datetime_range(self):
-        df = pd.DataFrame(
-            {"ts": pd.to_datetime(["2024-01-01", "2024-06-15", "2024-12-31"])}
-        )
+        df = pd.DataFrame({"ts": pd.to_datetime(["2024-01-01", "2024-06-15", "2024-12-31"])})
         cp = DataProfiler().profile(df).columns["ts"]
         assert cp.min_date is not None
         assert cp.max_date is not None
@@ -146,7 +143,7 @@ class TestDataProfiler:
     def test_samples_have_string_keys(self, sample_df):
         profile = DataProfiler().profile(sample_df)
         for row in profile.samples:
-            assert all(isinstance(k, str) for k in row.keys())
+            assert all(isinstance(k, str) for k in row)
 
     # ------------------------------------------------------------------
     # Serialisation
