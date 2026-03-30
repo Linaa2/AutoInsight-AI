@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import yaml
 from langchain_core.output_parsers import StrOutputParser
@@ -51,10 +52,10 @@ class ProfilerAgent:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _load_prompts(self) -> dict:
+    def _load_prompts(self) -> dict[str, Any]:
         path = Path(os.getenv("PROMPTS_PATH", str(_DEFAULT_PROMPTS_PATH)))
         with path.open(encoding="utf-8") as fh:
-            data = yaml.safe_load(fh)
+            data: dict[str, Any] = yaml.safe_load(fh)
         if "profiler" not in data:
             raise KeyError(f"'profiler' key not found in prompts file: {path}")
-        return data["profiler"]
+        return dict(data["profiler"])
