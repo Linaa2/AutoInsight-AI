@@ -10,7 +10,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pandas as pd
 import streamlit as st
-from dotenv import load_dotenv
 
 from agents.analyst import AnalystAgent
 from agents.profiler import ProfilerAgent
@@ -80,12 +79,12 @@ def _build_sample_text(df: pd.DataFrame, n: int = 5) -> str:
 
 def main() -> None:
     st.set_page_config(
-        page_title=_APP_TITLE,
+        page_title=settings.APP_TITLE,
         page_icon="🔍",
         layout="wide",
     )
 
-    st.title(f"🔍 {_APP_TITLE}")
+    st.title(f"🔍 {settings.APP_TITLE}")
     st.caption("Upload a dataset to get an instant deterministic profile and AI-powered analysis.")
 
     # ---- Sidebar ----
@@ -151,7 +150,7 @@ def main() -> None:
         _render_columns(profile)
 
     with tab_sample:
-        st.dataframe(df.head(_SAMPLE_ROWS), use_container_width=True)
+        st.dataframe(df.head(settings.PROFILER_SAMPLE_ROWS), use_container_width=True)
 
     with tab_ai:
         _render_ai_analysis(profile, enable_ai)
@@ -335,81 +334,3 @@ def _render_report(enable_ai: bool) -> None:
 
 if __name__ == "__main__":
     main()
-=======
-"""AutoInsight-AI — Streamlit application entry point.
-
-Launch command (from the project root):
-    uv run streamlit run app/main.py
-
-Pages:
-    - Home (this file)          : project overview and navigation guide
-    - Visualizer Playground     : test the visualizer agent interactively
-                                  (app/pages/visualizer_playground.py)
-
-Streamlit automatically detects files under app/pages/ and adds them to the
-sidebar navigation.
-"""
-
-import sys
-from pathlib import Path
-
-import streamlit as st
-
-# Ensure the project root (one level above the `app/` directory) is on sys.path
-# so that `agents`, `visualization`, `utils`, etc. are importable from any
-# Streamlit page, including sub-pages under app/pages/.
-_PROJECT_ROOT = Path(__file__).parent.parent.resolve()
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
-
-st.set_page_config(
-    page_title="AutoInsight-AI",
-    page_icon="🤖",
-    layout="wide",
-)
-
-st.title("🤖 AutoInsight-AI")
-st.markdown(
-    """
-    **An AI agent that automatically analyzes datasets, generates visualizations,
-    and produces comprehensive reports.**
-
-    ---
-
-    ### Pages available
-
-    Use the sidebar to navigate between pages.
-
-    | Page | Description |
-    |---|---|
-    | 📊 **Visualizer Playground** | Test the visualizer agent with predefined dataset examples |
-
-    ---
-
-    ### Architecture
-
-    ```
-    Upload CSV/Excel
-           │
-           ▼
-     Profiler Agent  →  Dataset profile (stats, schema, data quality)
-           │
-           ▼
-     Analyst Agent   →  Business insights (structured text)
-           │
-           ▼
-     Visualizer Agent →  Chart specs + Plotly figures
-           │
-           ▼
-     Reporter Agent  →  Comprehensive Markdown report
-    ```
-
-    Orchestrated by **LangGraph** · Monitored by **LangFuse** · Memory via **ChromaDB**
-
-    ---
-
-    > **Project DATA712 — GenAI · MS IA Expert Data & MLOps · Télécom Paris 2025-2026**
-    > ELAMINE Mohammed · RHIATI HAZIME Lina · BOUTROUFT Younes
-    """
-)
->>>>>>> 3da349c (add two local Ollama models (text and code))

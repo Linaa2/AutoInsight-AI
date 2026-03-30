@@ -110,9 +110,8 @@ class TestDataProfiler:
         assert isinstance(cp.top_values, dict)
         assert len(cp.top_values) > 0
 
-    def test_top_values_respects_env(self, sample_df, monkeypatch):
-        monkeypatch.setenv("PROFILER_TOP_VALUES", "2")
-        cp = DataProfiler().profile(sample_df).columns["department"]
+    def test_top_values_respects_env(self, sample_df):
+        cp = DataProfiler(top_values=2).profile(sample_df).columns["department"]
         assert len(cp.top_values) <= 2
 
     # ------------------------------------------------------------------
@@ -130,14 +129,12 @@ class TestDataProfiler:
     # Samples
     # ------------------------------------------------------------------
 
-    def test_sample_count_default(self, sample_df, monkeypatch):
-        monkeypatch.setenv("PROFILER_SAMPLE_ROWS", "5")
-        profile = DataProfiler().profile(sample_df)
+    def test_sample_count_default(self, sample_df):
+        profile = DataProfiler(sample_rows=5).profile(sample_df)
         assert len(profile.samples) == 5
 
-    def test_sample_count_custom(self, sample_df, monkeypatch):
-        monkeypatch.setenv("PROFILER_SAMPLE_ROWS", "3")
-        profile = DataProfiler().profile(sample_df)
+    def test_sample_count_custom(self, sample_df):
+        profile = DataProfiler(sample_rows=3).profile(sample_df)
         assert len(profile.samples) == 3
 
     def test_samples_have_string_keys(self, sample_df):

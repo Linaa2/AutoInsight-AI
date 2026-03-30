@@ -1,11 +1,12 @@
 """Data loading utilities supporting CSV, Excel, and Parquet formats."""
 
 import io
-import os
 from enum import StrEnum
 from pathlib import Path
 
 import pandas as pd
+
+from config.settings import settings
 
 
 class FileFormat(StrEnum):
@@ -29,15 +30,17 @@ class UnsupportedFormatError(Exception):
 class DataLoader:
     """Loads tabular data from CSV, Excel, or Parquet files.
 
-    Environment variables:
-        DATA_LOADER_EXCEL_SHEET: Sheet index (int) or name (str) to load from
-                                 Excel files. Defaults to 0 (first sheet).
+    Args:
+        excel_sheet: Sheet index (int) or name (str) to load from Excel files.
+                     Defaults to ``settings.DATA_LOADER_EXCEL_SHEET``.
     """
 
-    def __init__(self) -> None:
-        sheet_env = os.getenv("DATA_LOADER_EXCEL_SHEET", "0")
-        # Use integer index when the env value is purely numeric, else treat as sheet name.
-        self._excel_sheet: int | str = int(sheet_env) if sheet_env.isdigit() else sheet_env
+    def __init__(self, excel_sheet: int | str | None = None) -> None:
+        if excel_sheet is not None:
+            self._excel_sheet: int | str = excel_sheet
+        else:
+            sheet_env = settings.DATA_LOADER_EXCEL_SHEET
+            self._excel_sheet = int(sheet_env) if sheet_env.isdigit() else sheet_env
 
     # ------------------------------------------------------------------
     # Public interface
