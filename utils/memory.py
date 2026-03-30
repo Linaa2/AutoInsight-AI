@@ -31,27 +31,17 @@ Usage:
 from __future__ import annotations
 
 import logging
-import os
 from typing import TYPE_CHECKING, ClassVar
 
-from dotenv import load_dotenv
 from langchain_community.vectorstores import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 if TYPE_CHECKING:
     from langchain_core.embeddings import Embeddings
 
-load_dotenv()
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Runtime configuration
-# ---------------------------------------------------------------------------
-
-_HOST: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-_EMBED_MODEL: str = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
-_CHROMA_DIR: str = os.getenv("CHROMA_DIR", "./chroma_db")
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +50,12 @@ _CHROMA_DIR: str = os.getenv("CHROMA_DIR", "./chroma_db")
 
 
 class EmbeddingClient:
-    """Factory for embedding models. Mirrors LLMClient from llm.py."""
+    """Factory for embedding models.
+
+    Reads configuration from the centralised :data:`~config.settings.settings`
+    singleton — the single source of truth for ``OLLAMA_BASE_URL`` and
+    ``OLLAMA_EMBED_MODEL``.
+    """
 
     @staticmethod
     def get_embeddings() -> Embeddings:
@@ -68,8 +63,8 @@ class EmbeddingClient:
         from langchain_ollama import OllamaEmbeddings
 
         return OllamaEmbeddings(
-            base_url=_HOST,
-            model=_EMBED_MODEL,
+            base_url=settings.OLLAMA_BASE_URL,
+            model=settings.OLLAMA_EMBED_MODEL,
         )
 
 
@@ -107,7 +102,7 @@ class ContextStore:
     ]
 
     def __init__(self, persist_dir: str | None = None):
-        self.persist_dir = persist_dir or _CHROMA_DIR
+        self.persist_dir = persist_dir or settings.CHROMA_DIR
         self._embeddings = EmbeddingClient.get_embeddings()
         self._splitter = RecursiveCharacterTextSplitter(
             chunk_size=500,
