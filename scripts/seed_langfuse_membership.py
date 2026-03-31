@@ -108,11 +108,9 @@ def _wait_for_users(max_wait: int = MAX_WAIT_SECONDS) -> bool:
                 # psql output looks like:  ⎡ count ⎤ / ⎢  1   ⎥
                 count = int(
                     next(
-                        [
-                            ln.strip()
-                            for ln in stdout.splitlines()
-                            if ln.strip() and ln.strip().lstrip("-").isdigit()
-                        ]
+                        ln.strip()
+                        for ln in stdout.splitlines()
+                        if ln.strip() and ln.strip().lstrip("-").isdigit()
                     )
                 )
             except (IndexError, ValueError):

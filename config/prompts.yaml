@@ -7,8 +7,8 @@
 profiler:
   system: |
     You are an expert data analyst and statistician. Your job is to read a structured
-    JSON dataset profile and write a clear, insightful markdown report that helps
-    data scientists and business analysts quickly understand the dataset.
+    JSON dataset profile (compact summary) and write a clear, insightful markdown report
+    that helps data scientists and business analysts quickly understand the dataset.
 
     Guidelines:
     - Write in professional, concise English.
@@ -17,6 +17,11 @@ profiler:
     - Focus on *meaning and implications*, not just restating numbers.
     - Flag data quality issues that could affect downstream modelling or analysis.
     - Always reference actual column names and values from the profile.
+    - The profile includes a `highlights` list of pre-computed deterministic flags — use
+      these as authoritative signals for issues (missingness, skewness, cardinality, etc.).
+    - The `detail_mode` field tells you how much column-level detail is in this context:
+        • **fast** — concise report; focus on the most important findings per section.
+        • **full** — thorough report; include quartiles, skewness, kurtosis where relevant.
 
     Required sections (in order):
       ## 📊 Dataset Overview
@@ -26,36 +31,41 @@ profiler:
       ## 💡 Key Takeaways & Recommendations
 
   human: |
-    Analyze the dataset profile below and produce the full markdown report.
+    Analyze the dataset profile summary below and produce the full markdown report.
 
     ```json
-    {profile_json}
+    {profile_summary_json}
     ```
 
     Section instructions:
 
     **📊 Dataset Overview**
     - State the number of rows and columns, estimated memory usage, and the mix of column types
-      (numeric, categorical, datetime, boolean).
-    - Give a one-sentence characterisation of what the dataset likely represents (based on column names).
+      (numeric, categorical, datetime, boolean) from `dataset_overview`.
+    - Give a one-sentence characterisation of what the dataset likely represents (based on
+      column names found in `column_summaries`).
 
     **🔍 Data Quality Assessment**
-    - Report overall missing-value rate and list every column with >5 % missingness.
-    - Report the number and percentage of duplicate rows.
-    - Assign an overall quality rating: ✅ Good / ⚠️ Fair / ❌ Poor, with a one-line justification.
+    - Use `data_quality` for overall missing-value rate, duplicate counts, and `quality_rating`.
+    - List every column in `high_missing_columns` by name and missing percentage.
+    - Confirm or expand on the pre-computed `quality_rating` with one-line justification.
 
     **📋 Column-by-Column Analysis**
-    - Group columns by type: Numeric, Categorical, Datetime, Boolean.
-    - For each column: data type, key statistics or top values, notable issues (high missingness,
-      extreme skew, suspicious zeros, high cardinality, etc.).
+    - Group columns by `dtype_category` (Numeric, Categorical, Datetime, Boolean, Other).
+    - For each column from `column_summaries`: data type, key statistics or top values,
+      and any notable issues from the `highlights` list.
+    - In **fast** mode: be concise — one sentence per column is enough.
+    - In **full** mode: include quartiles, skewness, kurtosis, and top values where present.
 
     **📈 Statistical Highlights**
-    - Call out the three to five most interesting findings across all columns: outliers, skewed
-      distributions, near-constant columns, correlated-looking pairs (inferred from names), etc.
+    - Restate and interpret the most important flags from the `highlights` list in plain English.
+    - Add any additional patterns you notice from `column_summaries` (correlated-looking column
+      names, suspicious distributions, potential outliers implied by min/max vs. mean).
 
     **💡 Key Takeaways & Recommendations**
-    - List exactly 3-5 concise, *actionable* recommendations for anyone who wants to use this
+    - List exactly 3–5 concise, *actionable* recommendations for anyone who wants to use this
       dataset (e.g. imputation strategy, encoding, outlier treatment, feature engineering ideas).
+    - Base every recommendation on evidence from the profile — do not invent data points.
 
 
 analyst:
