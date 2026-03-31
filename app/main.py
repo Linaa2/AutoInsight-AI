@@ -260,6 +260,28 @@ def _render_html_pipeline_status(
         'box-shadow:0 2px 6px rgba(0,0,0,0.10);">&#9632; END</div>'
     )
 
+    # LLM Judge — post-run, user-triggered (shown after END with distinct purple styling)
+    pipeline_eval = st.session_state.get("pipeline_eval")
+    judge_done = pipeline_eval is not None
+    judge_bg = "d1fae5" if judge_done else "f5f3ff"
+    judge_border = "059669" if judge_done else "7c3aed"
+    judge_color = "065f46" if judge_done else "4c1d95"
+    judge_badge = "✅" if judge_done else "⬜"
+    judge_label = "Evaluated" if judge_done else "Available"
+    parts.append(
+        '<div style="color:#7c3aed;font-size:16px;flex-shrink:0;padding:0 4px;">'
+        "&#8212;&#9654;</div>"
+    )
+    parts.append(
+        f'<div style="background:#{judge_bg};border:2px dashed #{judge_border};'
+        f"color:#{judge_color};border-radius:10px;padding:10px 14px;min-width:110px;"
+        "text-align:center;font-family:sans-serif;font-size:13px;flex-shrink:0;"
+        'box-shadow:0 2px 6px rgba(0,0,0,0.10);">'
+        '<div style="font-weight:700;">🔍 LLM Judge</div>'
+        f'<div style="font-size:11px;margin-top:4px;">{judge_badge} {judge_label}</div>'
+        "</div>"
+    )
+
     html = (
         '<div style="display:flex;align-items:center;justify-content:center;'
         "flex-wrap:nowrap;gap:2px;padding:18px 12px;"

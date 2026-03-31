@@ -41,6 +41,26 @@ _AGENT_META: dict[str, dict[str, str]] = {
 
 _NODE_ORDER = ["profiler", "analyst", "uncertainty", "visualizer", "reporter", "rag_storage"]
 
+# LLM Judge — post-run node (not part of the automated pipeline)
+_LLM_JUDGE_STYLE_PENDING: dict[str, str] = {
+    "background": "#f5f3ff",
+    "border": "2px dashed #7c3aed",
+    "color": "#4c1d95",
+    "borderRadius": "10px",
+    "padding": "10px 14px",
+    "fontFamily": "sans-serif",
+    "fontSize": "13px",
+    "textAlign": "center",
+    "minWidth": "130px",
+    "boxShadow": "0 2px 6px rgba(0,0,0,0.12)",
+}
+_LLM_JUDGE_STYLE_DONE: dict[str, str] = {
+    **_LLM_JUDGE_STYLE_PENDING,
+    "background": "#d1fae5",
+    "border": "2px solid #059669",
+    "color": "#065f46",
+}
+
 # React Flow node colours per status
 _STATUS_STYLE: dict[str, dict[str, str]] = {
     "success": {
@@ -75,7 +95,7 @@ _STATUS_STYLE: dict[str, dict[str, str]] = {
 # React Flow pipeline canvas
 # ---------------------------------------------------------------------------
 
-# Horizontal positions: START + 5 agents + END, spaced 200 px apart
+# Horizontal positions: START + pipeline agents + END + LLM Judge, spaced 200 px apart
 _NODE_X: dict[str, float] = {
     "start": 0,
     "profiler": 200,
@@ -83,8 +103,9 @@ _NODE_X: dict[str, float] = {
     "uncertainty": 600,
     "visualizer": 800,
     "reporter": 1000,
-    "rag_storage": 1050,
+    "rag_storage": 1000,  # shares column with reporter (rendered below)
     "end": 1200,
+    "llm_judge": 1400,
 }
 _NODE_Y = 80  # vertical centre for all nodes
 
@@ -214,6 +235,40 @@ def _render_pipeline_diagram(
             edge_type="smoothstep",
             marker_end={"type": "arrowclosed"},
             style={"stroke": "#6366f1", "strokeWidth": 2},
+        )
+    )
+
+    # LLM Judge — post-run, user-triggered node after END
+    pipeline_eval = st.session_state.get("pipeline_eval")
+    judge_done = pipeline_eval is not None
+    judge_style = _LLM_JUDGE_STYLE_DONE if judge_done else _LLM_JUDGE_STYLE_PENDING
+    judge_badge = "✅" if judge_done else "⬜"
+    judge_status_label = "Evaluated" if judge_done else "User-triggered"
+    judge_label = f"🔍 <b>LLM Judge</b><br>{judge_badge} {judge_status_label}"
+    nodes.append(
+        StreamlitFlowNode(
+            id="llm_judge",
+            pos=(_NODE_X["llm_judge"], _NODE_Y),
+            data={"content": judge_label},
+            node_type="default",
+            source_position="right",
+            target_position="left",
+            draggable=False,
+            selectable=False,
+            connectable=False,
+            deletable=False,
+            style=judge_style,
+        )
+    )
+    edges.append(
+        StreamlitFlowEdge(
+            id="end-llm_judge",
+            source="end",
+            target="llm_judge",
+            edge_type="smoothstep",
+            animated=False,
+            marker_end={"type": "arrowclosed"},
+            style={"stroke": "#7c3aed", "strokeWidth": 2, "strokeDasharray": "6 3"},
         )
     )
 
