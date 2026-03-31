@@ -36,6 +36,7 @@ from visualization.executor import execute_chart
 if TYPE_CHECKING:
     import pandas as pd
 
+    from evaluation.schemas import PipelineEvaluation
     from tools.profiler_engine import DataProfile
 
 # ---------------------------------------------------------------------------
@@ -138,7 +139,13 @@ button[data-baseweb="tab"] {
 # Session-state helpers
 # ---------------------------------------------------------------------------
 
-_STATE_KEYS = ("analysis_result", "last_file_name", "analysis_running", "analysis_cancelled")
+_STATE_KEYS = (
+    "analysis_result",
+    "last_file_name",
+    "analysis_running",
+    "analysis_cancelled",
+    "pipeline_eval",
+)
 
 
 def _reset_analysis() -> None:
@@ -693,6 +700,169 @@ def _render_report_tab(result: dict[str, Any], key_suffix: str = "") -> None:
 
 # _render_diagnostics replaced by diagnostics.renderer.render_diagnostics_tab
 
+# ---------------------------------------------------------------------------
+# LLM Judge tab
+# ---------------------------------------------------------------------------
+
+_GRADE_ICONS: dict[str, str] = {
+    "excellent": "🟢",
+    "good": "🟡",
+    "fair": "🟠",
+    "poor": "🔴",
+}
+
+
+def _render_artifact_panel(eval_result: Any, key_suffix: str = "") -> None:
+    """Render the score breakdown for a single pipeline artifact."""
+    from evaluation.schemas import AnalystEvaluationResult
+
+    score = eval_result.overall_score
+    grade = str(eval_result.grade)
+    icon = _GRADE_ICONS.get(grade, "⬜")
+
+    st.markdown(f"**Score: {score:.0%}  ·  Grade: {icon} {grade.capitalize()}**")
+    st.divider()
+
+    for criterion in eval_result.criteria:
+        col_l, col_b, col_s = st.columns([3, 5, 1])
+        with col_l:
+            st.caption(criterion.label)
+        with col_b:
+            st.progress(criterion.score)
+        with col_s:
+            st.caption(f"**{criterion.score:.0%}**")
+        st.caption(f"&nbsp;&nbsp;&nbsp;&nbsp;_{criterion.rationale}_")
+
+    st.divider()
+    st.markdown(f"**Assessment:** {eval_result.critique}")
+
+    if eval_result.suggestions:
+        st.markdown("**Suggestions:**")
+        for sug in eval_result.suggestions:
+            st.markdown(f"- {sug}")
+
+    # Per-insight table — analyst only
+    if isinstance(eval_result, AnalystEvaluationResult) and eval_result.per_insight:
+        st.divider()
+        with st.expander("📋 Per-Insight Scores", expanded=False):
+            import pandas as pd
+
+            rows = [
+                {
+                    "Insight": ins.title,
+                    "Factual": f"{ins.factual_correctness:.0%}",
+                    "Relevance": f"{ins.relevance:.0%}",
+                    "Actionable": f"{ins.actionability:.0%}",
+                    "Note": ins.note,
+                }
+                for ins in eval_result.per_insight
+            ]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, key=f"pi_df{key_suffix}")
+
+
+def _run_llm_judge(result: dict[str, Any]) -> None:
+    """Run the three-artifact LLM Judge evaluation and store in session state."""
+    from evaluation.llm_judge import EvaluationAgent
+    from evaluation.schemas import PipelineEvaluation
+
+    agent = EvaluationAgent()
+    pipeline_eval = PipelineEvaluation()
+
+    profile_markdown: str = result.get("profile_markdown", "")
+    profile_data: dict[str, Any] = result.get("profile_data") or {}
+    insights: list[dict[str, Any]] = result.get("insights") or []
+    insights_markdown: str = result.get("insights_markdown", "")
+    report_markdown: str = result.get("report_markdown", "")
+    critiques: list[dict[str, Any]] | None = result.get("critiques")
+    confidence_scores: list[dict[str, Any]] | None = result.get("confidence_scores")
+
+    if profile_markdown:
+        with st.spinner("🔍 Evaluating profiler report…"):
+            pipeline_eval.profiler_eval = agent.evaluate_profiler(profile_markdown, profile_data)
+
+    if insights:
+        with st.spinner("🔍 Evaluating analyst insights…"):
+            pipeline_eval.analyst_eval = agent.evaluate_analyst(
+                insights,
+                profile_markdown,
+                profile_data,
+                critiques=critiques,
+                confidence_scores=confidence_scores,
+            )
+
+    if report_markdown:
+        with st.spinner("🔍 Evaluating final report…"):
+            pipeline_eval.reporter_eval = agent.evaluate_reporter(
+                report_markdown, profile_markdown, insights_markdown
+            )
+
+    st.session_state["pipeline_eval"] = pipeline_eval
+
+
+def _render_llm_judge_tab(result: dict[str, Any], key_suffix: str = "") -> None:
+    """Render the LLM Judge post-run quality evaluation tab."""
+    st.markdown("### 🔍 LLM-as-Judge Quality Evaluation")
+    st.caption(
+        "Post-run quality assessment: the judge evaluates *output quality* of each "
+        "pipeline artifact — independent of the in-pipeline Critic and Uncertainty agents. "
+        "Triggers 3 LLM calls."
+    )
+
+    pipeline_eval: PipelineEvaluation | None = st.session_state.get("pipeline_eval")
+
+    if st.button("▶ Run Evaluation", type="primary", key=f"run_eval{key_suffix}"):
+        _run_llm_judge(result)
+        st.rerun()
+
+    if pipeline_eval is None:
+        st.info(
+            "Click **Run Evaluation** to score profiler, analyst, and reporter output quality. "
+            "Results persist until you upload a new file or re-run the pipeline."
+        )
+        return
+
+    # ── Pipeline-level KPI ─────────────────────────────────────────────────
+    st.divider()
+    score = pipeline_eval.pipeline_score
+    grade = pipeline_eval.pipeline_grade
+    icon = _GRADE_ICONS.get(grade, "⬜")
+
+    evaluated = sum(
+        1
+        for ev in (
+            pipeline_eval.profiler_eval,
+            pipeline_eval.analyst_eval,
+            pipeline_eval.reporter_eval,
+        )
+        if ev is not None
+    )
+    kpi1, kpi2, kpi3 = st.columns(3)
+    kpi1.metric("Pipeline Score", f"{score:.0%}")
+    kpi2.metric("Pipeline Grade", f"{icon} {grade.capitalize()}")
+    kpi3.metric("Artifacts Evaluated", evaluated)
+    st.divider()
+
+    # ── Per-artifact sub-tabs ──────────────────────────────────────────────
+    sub_prof, sub_anal, sub_rep = st.tabs(["📊 Profiler", "💡 Analyst", "📄 Reporter"])
+
+    with sub_prof:
+        if pipeline_eval.profiler_eval:
+            _render_artifact_panel(pipeline_eval.profiler_eval, key_suffix=f"{key_suffix}_prof")
+        else:
+            st.caption("Profiler not evaluated — no profile markdown available.")
+
+    with sub_anal:
+        if pipeline_eval.analyst_eval:
+            _render_artifact_panel(pipeline_eval.analyst_eval, key_suffix=f"{key_suffix}_anal")
+        else:
+            st.caption("Analyst not evaluated — no insights available.")
+
+    with sub_rep:
+        if pipeline_eval.reporter_eval:
+            _render_artifact_panel(pipeline_eval.reporter_eval, key_suffix=f"{key_suffix}_rep")
+        else:
+            st.caption("Reporter not evaluated — no report markdown available.")
+
 
 # ---------------------------------------------------------------------------
 # Memory tab
@@ -1121,6 +1291,10 @@ def _render_result_tabs(result: dict[str, Any], df: pd.DataFrame) -> None:
     if result.get("graph_trace"):
         tab_names.append("🔧 Diagnostics")
         tab_keys.append("diag")
+    # LLM Judge — always available after a full pipeline run
+    if result.get("report_markdown"):
+        tab_names.append("🔍 LLM Judge")
+        tab_keys.append("llm_judge")
 
     if not tab_names:
         st.warning("Analysis completed but no results were produced.")
@@ -1147,6 +1321,8 @@ def _render_result_tabs(result: dict[str, Any], df: pd.DataFrame) -> None:
                 _render_observability_tab(result)
             elif key == "diag":
                 render_diagnostics_tab(result)
+            elif key == "llm_judge":
+                _render_llm_judge_tab(result)
 
 
 def _render_progressive_tabs(
