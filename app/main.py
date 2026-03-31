@@ -1164,8 +1164,20 @@ def _render_progressive_tabs(
     tab_agents: list[str] = []
 
     for agent in _CONTENT_AGENT_ORDER:
+        # uncertainty is rendered inside the Evaluation tab (critic)
+        if agent == "uncertainty":
+            continue
         meta = _AGENT_META[agent]
-        if agent in completed:
+        # Mark Evaluation tab done only when *both* critic & uncertainty finished
+        if agent == "critic":
+            both_done = "critic" in completed and "uncertainty" in completed
+            if both_done:
+                tab_labels.append(f"{meta['icon']} {meta['label']} ✓")
+            elif agent in completed or agent == next_agent or next_agent == "uncertainty":
+                tab_labels.append(f"{meta['icon']} {meta['label']} ⏳")
+            else:
+                tab_labels.append(f"{meta['icon']} {meta['label']}")
+        elif agent in completed:
             tab_labels.append(f"{meta['icon']} {meta['label']} ✓")
         elif agent == next_agent:
             tab_labels.append(f"{meta['icon']} {meta['label']} ⏳")
@@ -1185,7 +1197,7 @@ def _render_progressive_tabs(
                     _render_profile_tab(cumulative, key_suffix=ks)
                 elif agent == "analyst":
                     _render_insights_tab(cumulative, key_suffix=ks)
-                elif agent in ("critic", "uncertainty"):
+                elif agent == "critic":
                     _render_evaluation_tab(cumulative, key_suffix=ks)
                 elif agent == "visualizer":
                     _render_visualizations_tab(cumulative, df, key_suffix=ks)
