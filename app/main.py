@@ -23,7 +23,6 @@ from app.memory_view import (
     retrieve_high_priority_insights,
     retrieve_insights_by_category,
 )
-from app.uncertainty_view import render_confidence_scores
 from config.settings import REPO_ROOT, settings
 from diagnostics.renderer import render_diagnostics_tab, render_pipeline_diagram
 from orchestration.graph import _AGENTS_ORDER as _CONTENT_AGENT_ORDER
@@ -51,7 +50,8 @@ _BROKEN_AGENT_PATH = _ASSETS_DIR / "ai_agent_broken.png"
 _AGENT_META: dict[str, dict[str, str]] = {
     "profiler": {"icon": "📊", "label": "Profiler", "verb": "Profiling dataset…"},
     "analyst": {"icon": "💡", "label": "Analyst", "verb": "Generating insights…"},
-    "uncertainty": {"icon": "🎯", "label": "Confidence", "verb": "Scoring confidence…"},
+    "critic": {"icon": "🔎", "label": "Evaluation", "verb": "Reviewing insights…"},
+    "uncertainty": {"icon": "🎯", "label": "Evaluation", "verb": "Scoring confidence…"},
     "visualizer": {"icon": "📈", "label": "Visualizer", "verb": "Creating charts…"},
     "reporter": {"icon": "📄", "label": "Reporter", "verb": "Writing report…"},
     "rag_storage": {
@@ -398,12 +398,6 @@ def _render_insights_tab(result: dict[str, Any], key_suffix: str = "") -> None:
     else:
         st.markdown(md or "")
 
-    # ── Confidence Scores (UncertaintyEstimator output) ──────────────────────
-    confidence_scores: list[dict[str, Any]] | None = result.get("confidence_scores")
-    if confidence_scores:
-        st.divider()
-        render_confidence_scores(confidence_scores, key_suffix=key_suffix)
-
     st.divider()
     if md:
         st.download_button(
@@ -421,6 +415,152 @@ def _render_insights_tab(result: dict[str, Any], key_suffix: str = "") -> None:
             mime="application/json",
             key=f"dl_insights_json{key_suffix}",
         )
+
+
+def _render_evaluation_tab(result: dict[str, Any], key_suffix: str = "") -> None:
+    """Render the combined Evaluation tab: critic review + confidence scores."""
+    critiques: list[dict[str, Any]] | None = result.get("critiques")
+    critic_output: str | None = result.get("critic_output")
+    confidence_scores: list[dict[str, Any]] | None = result.get("confidence_scores")
+
+    has_critic = bool(critiques or critic_output)
+    has_uncertainty = bool(confidence_scores)
+
+    if not has_critic and not has_uncertainty:
+        st.info(
+            "No evaluation data available — critic and uncertainty agents may have been skipped."
+        )
+        return
+
+    # ── Critic Review section ───────────────────────────────────────────────
+    if has_critic:
+        st.markdown("### 🔎 Critic Review")
+
+        # Summary header from trace
+        trace = result.get("graph_trace", [])
+        critic_trace = next((t for t in trace if t.get("node") == "critic"), None)
+        if critic_trace:
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                st.success(f"✅ {critic_trace.get('summary', 'Critiques generated')}")
+            with c2:
+                dur = critic_trace.get("duration_s", 0)
+                st.caption(f"⏱️ {dur:.1f}s")
+
+        if critiques:
+            # Verdict summary
+            supported = sum(1 for c in critiques if c.get("verdict") == "supported")
+            partial = sum(1 for c in critiques if c.get("verdict") == "partially_supported")
+            weak = sum(1 for c in critiques if c.get("verdict") == "weak")
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            sc1.metric("Reviewed", len(critiques))
+            sc2.metric("✅ Supported", supported)
+            sc3.metric("⚠️ Partial", partial)
+            sc4.metric("❌ Weak", weak)
+
+            st.divider()
+
+            for crit in critiques:
+                verdict = crit.get("verdict", "partially_supported")
+                confidence = crit.get("confidence", "medium")
+                v_icon = {"supported": "✅", "partially_supported": "⚠️", "weak": "❌"}.get(
+                    verdict, "⚠️"
+                )
+                c_icon = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(confidence, "🟡")
+                title = crit.get("insight_title", "Untitled")
+                with st.expander(
+                    f"{v_icon} {title} — {c_icon} {confidence.capitalize()}", expanded=True
+                ):
+                    st.markdown(
+                        f"**Verdict**: {verdict.replace('_', ' ').capitalize()} &nbsp;|&nbsp; "
+                        f"**Confidence**: {c_icon} {confidence.capitalize()}"
+                    )
+                    st.divider()
+                    st.success(f"**Strengths**: {crit.get('strengths', 'N/A')}")
+                    st.warning(f"**Weaknesses**: {crit.get('weaknesses', 'N/A')}")
+                    st.info(f"**Alternative hypotheses**: {crit.get('alternatives', 'N/A')}")
+        elif critic_output:
+            st.markdown(critic_output)
+
+        if critic_output:
+            st.divider()
+            st.download_button(
+                label="⬇️ Download Critic Review (.md)",
+                data=critic_output,
+                file_name="critic_review.md",
+                mime="text/markdown",
+                key=f"dl_critic{key_suffix}",
+            )
+
+    # ── Confidence Scores section ───────────────────────────────────────────
+    if has_uncertainty and confidence_scores:
+        if has_critic:
+            st.divider()
+        st.markdown("### 🎯 Confidence Scores")
+        st.caption(
+            "Each insight is scored on four drivers (0-25 pts each) using "
+            "deterministic rules and a targeted LLM assessment."
+        )
+
+        # KPI row
+        high = sum(1 for s in confidence_scores if s.get("confidence_level") == "high")
+        medium = sum(1 for s in confidence_scores if s.get("confidence_level") == "medium")
+        low = sum(1 for s in confidence_scores if s.get("confidence_level") == "low")
+        c0, c1, c2, c3 = st.columns(4)
+        c0.metric("Insights Scored", len(confidence_scores))
+        c1.metric("🟢 High", high)
+        c2.metric("🟡 Medium", medium)
+        c3.metric("🔴 Low", low)
+        st.divider()
+
+        _level_cfg = {
+            "high": {"icon": "🟢", "label": "High", "color": "#065f46", "bg": "#d1fae5"},
+            "medium": {"icon": "🟡", "label": "Medium", "color": "#92400e", "bg": "#fef3c7"},
+            "low": {"icon": "🔴", "label": "Low", "color": "#991b1b", "bg": "#fee2e2"},
+        }
+        _driver_labels = {
+            "data_quality": "📦 Data Quality",
+            "specificity": "🔬 Specificity",
+            "statistical_evidence": "📐 Statistical Evidence",
+            "critic_assessment": "🧐 Critic Assessment",
+        }
+
+        for i, score_dict in enumerate(confidence_scores):
+            title = score_dict.get("insight_title", f"Insight {i + 1}")
+            total = int(score_dict.get("confidence_score", 0))
+            level = str(score_dict.get("confidence_level", "medium"))
+            summary = str(score_dict.get("summary", ""))
+            drivers = score_dict.get("drivers", {})
+
+            cfg = _level_cfg.get(level, _level_cfg["medium"])
+            badge = (
+                f'<span style="background:{cfg["bg"]};color:{cfg["color"]};'
+                f"font-weight:700;font-size:0.82em;padding:3px 10px;"
+                f'border-radius:12px;white-space:nowrap;">'
+                f"{cfg['icon']} {cfg['label']} &nbsp;{total}%</span>"
+            )
+            with st.expander(
+                f"{cfg['icon']} **{total}%** — {title}",
+                expanded=(level == "low"),
+                key=f"uc_{i}{key_suffix}",
+            ):
+                st.markdown(badge + "&nbsp;&nbsp;" + summary, unsafe_allow_html=True)
+                st.divider()
+                st.markdown("**Score breakdown**")
+                for d_key, d_label in _driver_labels.items():
+                    d_data = drivers.get(d_key, {})
+                    d_score = int(d_data.get("score", 0))
+                    d_max = int(d_data.get("max", 25))
+                    d_reason = str(d_data.get("reason", "Not yet available"))
+                    col_l, col_b, col_s = st.columns([3, 5, 1])
+                    with col_l:
+                        st.caption(d_label)
+                    with col_b:
+                        st.progress(d_score / d_max if d_max else 0)
+                    with col_s:
+                        st.caption(f"**{d_score}/{d_max}**")
+                    st.caption(f"&nbsp;&nbsp;&nbsp;&nbsp;_{d_reason}_")
+            st.write("")
 
 
 def _render_visualizations_tab(
@@ -960,6 +1100,9 @@ def _render_result_tabs(result: dict[str, Any], df: pd.DataFrame) -> None:
     if result.get("insights") or result.get("insights_markdown"):
         tab_names.append("💡 Insights")
         tab_keys.append("insights")
+    if result.get("critiques") or result.get("critic_output") or result.get("confidence_scores"):
+        tab_names.append("🔎 Evaluation")
+        tab_keys.append("evaluation")
     if result.get("visualization_result"):
         tab_names.append("📈 Visualizations")
         tab_keys.append("viz")
@@ -992,6 +1135,8 @@ def _render_result_tabs(result: dict[str, Any], df: pd.DataFrame) -> None:
                 _render_profile_tab(result)
             elif key == "insights":
                 _render_insights_tab(result)
+            elif key == "evaluation":
+                _render_evaluation_tab(result)
             elif key == "viz":
                 _render_visualizations_tab(result, df)
             elif key == "report":
@@ -1040,8 +1185,8 @@ def _render_progressive_tabs(
                     _render_profile_tab(cumulative, key_suffix=ks)
                 elif agent == "analyst":
                     _render_insights_tab(cumulative, key_suffix=ks)
-                elif agent == "uncertainty":
-                    render_confidence_scores(cumulative.get("confidence_scores"), key_suffix=ks)
+                elif agent in ("critic", "uncertainty"):
+                    _render_evaluation_tab(cumulative, key_suffix=ks)
                 elif agent == "visualizer":
                     _render_visualizations_tab(cumulative, df, key_suffix=ks)
                 elif agent == "reporter":
