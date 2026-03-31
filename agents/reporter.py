@@ -11,6 +11,8 @@ Input (from LangGraph state):
     - analyst_output     : str          (analyst markdown)
     - insights           : list[dict]   (structured insight objects)
     - visualizer_output  : dict | None  (charts metadata from visualizer)
+    - critic_output      : str          (critic markdown, from CriticAgent)
+    - uncertainty_output : str          (confidence scores, from UncertaintyEstimator)
 
 Output:
     - reporter_output    : str          (full markdown report)
@@ -110,6 +112,7 @@ class ReporterAgent:
         insights: list[dict] | None = None,
         visualizer_output: dict | None = None,
         rag_context: str = "",
+        critic_output: str = "",
         uncertainty_output: str = "",
         callbacks: list | None = None,
     ) -> dict:
@@ -122,6 +125,8 @@ class ReporterAgent:
             insights:         Structured insight dicts (optional, enriches context).
             visualizer_output: Visualizer output dict with chart metadata (optional).
             rag_context:      Optional context retrieved from ChromaDB (previous runs).
+            critic_output:    Critic markdown (adversarial review of insights).
+            uncertainty_output: Confidence scores markdown from Uncertainty Estimator.
             callbacks:        Optional LangChain callbacks (e.g. LangFuse handler).
 
         Returns:
@@ -146,6 +151,16 @@ class ReporterAgent:
                     "The following is relevant context retrieved from a previous run "
                     "on this dataset. Use it only if it adds value to the current report.\n\n"
                     + rag_context.strip()
+                )
+
+            # Append critic review when available
+            if critic_output and critic_output.strip():
+                human_prompt += (
+                    "\n\n## 🔎 Critic Review\n"
+                    "Each insight was reviewed by an adversarial critic. Integrate "
+                    "the critique into the Key Insights section — mention weaknesses "
+                    "or alternative explanations where the verdict is "
+                    "'partially_supported' or 'weak'.\n\n" + critic_output.strip()
                 )
 
             # Append uncertainty confidence scores when available
@@ -189,6 +204,8 @@ def reporter_node(state: dict) -> dict:
         - analyst_output (str)
         - insights (list[dict], optional)
         - visualizer_output (dict, optional)
+        - critic_output (str, optional)
+        - uncertainty_output (str, optional)
 
     Writes to state:
         - reporter_output (str): full markdown report
@@ -197,6 +214,8 @@ def reporter_node(state: dict) -> dict:
     analyst_output = state.get("analyst_output", "")
     insights = state.get("insights")
     visualizer_output = state.get("visualizer_output")
+    critic_output = state.get("critic_output", "")
+    uncertainty_output = state.get("uncertainty_output", "")
 
     if not profiler_output and not analyst_output:
         return {
@@ -210,4 +229,6 @@ def reporter_node(state: dict) -> dict:
         analyst_output=analyst_output,
         insights=insights,
         visualizer_output=visualizer_output,
+        critic_output=critic_output,
+        uncertainty_output=uncertainty_output,
     )

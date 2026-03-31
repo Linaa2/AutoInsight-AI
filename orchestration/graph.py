@@ -10,6 +10,7 @@ This module defines the **canonical** multi-agent workflow as a
 Graph flow::
 
     START → profiler_node → analyst_node → visualizer_node → reporter_node → rag_storage_node → END
+    START → profiler_node → analyst_node → critic_node → uncertainty_node → visualizer_node → reporter_node → rag_storage_node → END
 
 Usage::
 
@@ -33,6 +34,7 @@ import pandas as pd
 from langgraph.graph import END, START, StateGraph
 
 from agents.analyst import AnalystAgent
+from agents.critic import CriticAgent
 from agents.profiler import ProfilerAgent
 from agents.reporter import ReporterAgent
 from agents.uncertainty import UncertaintyEstimator
@@ -51,7 +53,7 @@ from visualization.schemas import VisualizerRequest
 logger = logging.getLogger(__name__)
 
 _DF_REGISTRY: dict[str, pd.DataFrame] = {}
-_AGENTS_ORDER = ["profiler", "analyst", "uncertainty", "visualizer", "reporter"]
+_AGENTS_ORDER = ["profiler", "analyst", "critic", "uncertainty", "visualizer", "reporter"]
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +282,79 @@ def analyst_node(state: PipelineState) -> PipelineState:
                 status="failed",
                 started=t0,
                 keys_read=[_dataset_key(state), "profile_data", "profile_markdown"],
+                keys_written=[],
+                error=msg,
+                telemetry=telem,
+            )
+            return {"error": msg, "graph_trace": _append_trace(state, entry)}
+
+
+def critic_node(state: PipelineState) -> PipelineState:
+    """Run adversarial critique on each analyst insight.
+
+    Reads:  ``insights``, ``profile_data``
+    Writes: ``critiques``, ``critic_output``
+    """
+    t0 = time.time()
+    insights: list[dict[str, Any]] = state.get("insights") or []
+
+    if not insights:
+        entry = _trace_entry(
+            "critic",
+            status="skipped",
+            started=t0,
+            keys_read=["insights"],
+            keys_written=[],
+            summary="Skipped — no insights to critique",
+        )
+        return {"graph_trace": _append_trace(state, entry)}
+
+    profile_data: dict[str, Any] = state.get("profile_data") or {}
+    node_meta = {"dataset_id": state.get("dataset_id", ""), "file_name": state.get("file_name", "")}
+    res_before = collect_resource_snapshot()
+
+    with lf_monitor.node_span("critic", metadata=node_meta):
+        try:
+            agent = CriticAgent()
+            llm_start = time.time()
+            result = agent.run(insights=insights, profile_data=profile_data)
+            llm_end = time.time()
+
+            critiques: list[dict[str, Any]] = result.get("critiques", [])
+            critic_md: str = result.get("critic_output", "")
+
+            res_after = collect_resource_snapshot()
+            telem = build_telemetry(
+                task="text",
+                llm_start=llm_start,
+                llm_end=llm_end,
+                resource_before=res_before,
+                resource_after=res_after,
+            )
+            entry = _trace_entry(
+                "critic",
+                status="success",
+                started=t0,
+                keys_read=["insights", "profile_data"],
+                keys_written=["critiques", "critic_output"],
+                summary=f"Critiqued {len(critiques)}/{len(insights)} insights",
+                telemetry=telem,
+            )
+            return {
+                "critiques": critiques,
+                "critic_output": critic_md,
+                "graph_trace": _append_trace(state, entry),
+            }
+        except Exception as exc:
+            msg = f"CriticAgent failed: {exc}"
+            logger.exception(msg)
+            res_after = collect_resource_snapshot()
+            telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
+            entry = _trace_entry(
+                "critic",
+                status="failed",
+                started=t0,
+                keys_read=["insights", "profile_data"],
                 keys_written=[],
                 error=msg,
                 telemetry=telem,
@@ -539,6 +614,7 @@ def reporter_node(state: PipelineState) -> PipelineState:
                 insights=insights,
                 visualizer_output=viz_result,
                 rag_context=rag_context,
+                critic_output=state.get("critic_output") or "",
                 uncertainty_output=state.get("uncertainty_output") or "",
                 callbacks=callbacks,
             )
@@ -575,6 +651,8 @@ def reporter_node(state: PipelineState) -> PipelineState:
                     "insights_markdown",
                     "visualization_result",
                     "rag_analysis_context",
+                    "critic_output",
+                    "uncertainty_output",
                 ],
                 keys_written=keys_written,
                 summary=f"Report generated ({len(report)} chars)",
@@ -818,6 +896,8 @@ def _get_node_action(node_name: str):
                 return profiler_node
             case "analyst":
                 return analyst_node
+            case "critic":
+                return critic_node
             case "uncertainty":
                 return uncertainty_node
             case "visualizer":
@@ -839,7 +919,7 @@ def build_graph():
 
     Graph flow::
 
-        START → profiler → analyst → visualizer → reporter → rag_storage → END
+        START → profiler → analyst → critic → uncertainty → visualizer → reporter → rag_storage → END
 
     Returns a compiled LangGraph ``CompiledGraph`` ready for ``.invoke()``.
     """
