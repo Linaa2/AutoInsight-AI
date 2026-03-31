@@ -23,6 +23,7 @@ from app.memory_view import (
     retrieve_high_priority_insights,
     retrieve_insights_by_category,
 )
+from app.uncertainty_view import render_confidence_scores
 from config.settings import REPO_ROOT, settings
 from diagnostics.renderer import render_diagnostics_tab, render_pipeline_diagram
 from orchestration.graph import _AGENTS_ORDER as _CONTENT_AGENT_ORDER
@@ -50,6 +51,7 @@ _BROKEN_AGENT_PATH = _ASSETS_DIR / "ai_agent_broken.png"
 _AGENT_META: dict[str, dict[str, str]] = {
     "profiler": {"icon": "📊", "label": "Profiler", "verb": "Profiling dataset…"},
     "analyst": {"icon": "💡", "label": "Analyst", "verb": "Generating insights…"},
+    "uncertainty": {"icon": "🎯", "label": "Confidence", "verb": "Scoring confidence…"},
     "visualizer": {"icon": "📈", "label": "Visualizer", "verb": "Creating charts…"},
     "reporter": {"icon": "📄", "label": "Reporter", "verb": "Writing report…"},
     "rag_storage": {
@@ -395,6 +397,12 @@ def _render_insights_tab(result: dict[str, Any], key_suffix: str = "") -> None:
                 st.success(ins.get("recommendation", "—"))
     else:
         st.markdown(md or "")
+
+    # ── Confidence Scores (UncertaintyEstimator output) ──────────────────────
+    confidence_scores: list[dict[str, Any]] | None = result.get("confidence_scores")
+    if confidence_scores:
+        st.divider()
+        render_confidence_scores(confidence_scores, key_suffix=key_suffix)
 
     st.divider()
     if md:
@@ -1032,6 +1040,8 @@ def _render_progressive_tabs(
                     _render_profile_tab(cumulative, key_suffix=ks)
                 elif agent == "analyst":
                     _render_insights_tab(cumulative, key_suffix=ks)
+                elif agent == "uncertainty":
+                    render_confidence_scores(cumulative.get("confidence_scores"), key_suffix=ks)
                 elif agent == "visualizer":
                     _render_visualizations_tab(cumulative, df, key_suffix=ks)
                 elif agent == "reporter":

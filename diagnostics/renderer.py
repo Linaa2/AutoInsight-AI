@@ -33,12 +33,13 @@ _STATUS_BADGE: dict[str, str] = {"success": "✅", "failed": "❌", "skipped": "
 _AGENT_META: dict[str, dict[str, str]] = {
     "profiler": {"icon": "📊", "label": "Profiler"},
     "analyst": {"icon": "💡", "label": "Analyst"},
+    "uncertainty": {"icon": "🎯", "label": "Confidence"},
     "visualizer": {"icon": "📈", "label": "Visualizer"},
     "reporter": {"icon": "📄", "label": "Reporter"},
     "rag_storage": {"icon": "🧠", "label": "RAG Storage"},
 }
 
-_NODE_ORDER = ["profiler", "analyst", "visualizer", "reporter", "rag_storage"]
+_NODE_ORDER = ["profiler", "analyst", "uncertainty", "visualizer", "reporter", "rag_storage"]
 
 # React Flow node colours per status
 _STATUS_STYLE: dict[str, dict[str, str]] = {
@@ -74,15 +75,16 @@ _STATUS_STYLE: dict[str, dict[str, str]] = {
 # React Flow pipeline canvas
 # ---------------------------------------------------------------------------
 
-# Horizontal positions: START + 5 pipeline steps + END, spaced 210 px apart
+# Horizontal positions: START + 5 agents + END, spaced 200 px apart
 _NODE_X: dict[str, float] = {
     "start": 0,
-    "profiler": 210,
-    "analyst": 420,
-    "visualizer": 630,
-    "reporter": 840,
+    "profiler": 200,
+    "analyst": 400,
+    "uncertainty": 600,
+    "visualizer": 800,
+    "reporter": 1000,
     "rag_storage": 1050,
-    "end": 1260,
+    "end": 1200,
 }
 _NODE_Y = 80  # vertical centre for all nodes
 

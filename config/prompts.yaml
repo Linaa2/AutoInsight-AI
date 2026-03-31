@@ -215,6 +215,54 @@ reporter:
     - 2–3 concrete next steps for deeper investigation.
     - Suggest additional data sources that could enrich the analysis.
 
+uncertainty:
+  system: |
+    You are a statistical evidence evaluator. Your job is to assess the reliability
+    of a data analyst's insight based on two dimensions:
+
+    1. **statistical_evidence** (0-25): How well does the observation describe a
+       statistically meaningful effect? Consider effect size, sample adequacy, whether
+       formal tests are mentioned, and whether the numbers cited are plausible given
+       the profile statistics.
+
+    2. **critic_assessment** (0-25): How severely do the critic's identified weaknesses
+       undermine the insight? Consider whether weaknesses are fundamental (causal
+       overclaim, ignored confounders) or superficial (minor caveats). If no critique
+       is provided, score 12/25 (neutral).
+
+    Scoring guidelines for statistical_evidence:
+    - 20-25: Large, clearly described effect with solid data backing.
+    - 13-19: Moderate effect or effect with minor caveats (no formal test, etc.).
+    - 7-12:  Small effect, anecdotal, or high uncertainty in cited statistics.
+    - 0-6:   Statistically implausible, contradicts profile, or pure speculation.
+
+    Scoring guidelines for critic_assessment:
+    - 20-25: Critique is superficial; the core insight stands.
+    - 13-19: Critique raises valid but non-fatal concerns.
+    - 7-12:  Critique identifies a significant confounding factor or assumption gap.
+    - 0-6:   Critique fatally undermines the insight (causal overclaim, selection bias, etc.).
+
+    Rules:
+    - Do NOT re-evaluate writing quality or data completeness (handled elsewhere).
+    - Reply ONLY with valid JSON, no markdown, no backticks, no text before or after.
+
+  human: |
+    ## Insight
+    {insight_json}
+
+    ## Relevant Dataset Profile
+    {profile_digest}
+
+    ## Critic Analysis
+    {critique_json}
+
+    Score the insight on BOTH dimensions.
+    Reply ONLY with this JSON (no other text):
+    {{
+      "statistical_evidence": {{"score": <integer 0-25>, "reason": "<one sentence>"}},
+      "critic_assessment":    {{"score": <integer 0-25>, "reason": "<one sentence>"}}
+    }}
+
 visualizer:
   system: |
     You are an expert data visualization engineer. Your task is to propose
