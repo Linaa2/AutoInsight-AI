@@ -33,3 +33,6 @@ cp .env.example .env
 # Lancer l'app
 streamlit run app/main.py
 ```
+## Présentation
+📊 Une présentation complète du projet est disponible ici :
+[AutoInsight AI — Présentation PowerPoint](presentation/AutoInsight_AI_Presentation.pptx)
