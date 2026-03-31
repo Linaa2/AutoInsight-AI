@@ -13,6 +13,14 @@ from typing import TYPE_CHECKING, Any
 import streamlit as st
 from streamlit_lottie import st_lottie
 
+from app.memory_view import (
+    CATEGORY_ICONS,
+    INSIGHT_CATEGORIES,
+    build_memory_status,
+    retrieve_analysis_context,
+    retrieve_high_priority_insights,
+    retrieve_insights_by_category,
+)
 from config.settings import REPO_ROOT, settings
 from diagnostics.renderer import render_diagnostics_tab, render_pipeline_diagram
 from orchestration.graph import _AGENTS_ORDER, stream_analysis
@@ -466,6 +474,13 @@ def _render_report_tab(result: dict[str, Any], key_suffix: str = "") -> None:
         st.info("No report available — the reporter agent may have been skipped.")
         return
 
+    # Memory enrichment banner
+    if result.get("rag_analysis_context"):
+        st.info(
+            "📚 This report was **enriched with context** retrieved from previous "
+            "analyses stored in memory. Switch to the **🧠 Memory** tab to explore."
+        )
+
     # Summary header
     trace = result.get("graph_trace", [])
     reporter_trace = next((t for t in trace if t.get("node") == "reporter"), None)
@@ -501,6 +516,131 @@ def _render_report_tab(result: dict[str, Any], key_suffix: str = "") -> None:
 
 
 # _render_diagnostics replaced by diagnostics.renderer.render_diagnostics_tab
+
+
+# ---------------------------------------------------------------------------
+# Memory tab
+# ---------------------------------------------------------------------------
+
+
+def _render_memory_tab(result: dict[str, Any], key_suffix: str = "") -> None:
+    """Render the dedicated Memory / RAG showcase tab."""
+    status = build_memory_status(result)
+
+    # ── Section 1: Memory Status Overview ──────────────────────────────────
+    st.markdown("### 📋 Memory Status")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Dataset", status.dataset_id or "—")
+    c2.metric("Memory", "Available" if status.memory_available else "Unavailable")
+    c3.metric(
+        "Prior Context",
+        f"{status.previous_context_chars:,} chars" if status.previous_context_found else "None",
+    )
+    c4.metric("Stored", "Yes" if status.current_run_stored else "No")
+
+    # ── Section 2: Retrieved Context Preview ───────────────────────────────
+    rag_ctx = result.get("rag_analysis_context") or ""
+    if rag_ctx:
+        st.divider()
+        st.markdown("### 🔍 Retrieved Context (fed to Reporter)")
+        st.info(
+            "The following context was automatically retrieved from memory and "
+            "injected into the Reporter agent to enrich the final report."
+        )
+        with st.expander("View retrieved context", expanded=False):
+            st.text(rag_ctx)
+    else:
+        st.divider()
+        st.markdown("### 🔍 Retrieved Context")
+        st.caption(
+            "No prior context was found for this dataset. "
+            "Run a second analysis on the same file to see memory retrieval in action."
+        )
+
+    # ── Section 3: Stored Artifact Summary ─────────────────────────────────
+    st.divider()
+    st.markdown("### 📦 Stored Artifacts")
+    if status.stored_artifacts:
+        artifact_icons = {"profile": "📊", "insights": "💡", "report": "📄"}
+        cols = st.columns(len(status.stored_artifacts))
+        for col, art in zip(cols, status.stored_artifacts):
+            col.success(f"{artifact_icons.get(art, '📦')} {art.capitalize()}")
+        st.caption(
+            f"{status.total_chunks_stored} chunk(s) stored across "
+            f"{len(status.collections_used)} collection(s)"
+        )
+        if status.rag_summary:
+            st.caption(status.rag_summary)
+    else:
+        st.caption("No artifacts were stored during this run.")
+
+    # ── Section 4: Interactive Memory Retrieval ────────────────────────────
+    dataset_id = status.dataset_id
+    if dataset_id and status.memory_available:
+        st.divider()
+        st.markdown("### 🧪 Memory Retrieval Demo")
+        st.caption(
+            "Query the ChromaDB memory live. These are the same functions that "
+            "future agents (e.g. Text-to-Code) will use to ground their work."
+        )
+
+        demo_tab1, demo_tab2, demo_tab3 = st.tabs(
+            ["🔝 High Priority", "🏷️ By Category", "📑 Full Context"]
+        )
+
+        with demo_tab1:
+            if st.button("Retrieve high-priority insights", key=f"mem_hp{key_suffix}"):
+                with st.spinner("Querying memory…"):
+                    res = retrieve_high_priority_insights(dataset_id)
+                if res.empty:
+                    st.warning("No high-priority insights found in memory yet.")
+                else:
+                    st.text(res.content)
+
+        with demo_tab2:
+            selected = st.selectbox(
+                "Category",
+                INSIGHT_CATEGORIES,
+                format_func=lambda c: f"{CATEGORY_ICONS.get(c, '')} {c.capitalize()}",
+                key=f"mem_cat_sel{key_suffix}",
+            )
+            if st.button("Retrieve by category", key=f"mem_cat_btn{key_suffix}"):
+                with st.spinner("Querying memory…"):
+                    res = retrieve_insights_by_category(dataset_id, selected)
+                if res.empty:
+                    st.warning(f"No {selected} insights found in memory yet.")
+                else:
+                    st.text(res.content)
+
+        with demo_tab3:
+            if st.button("Retrieve full analysis context", key=f"mem_full{key_suffix}"):
+                with st.spinner("Querying memory…"):
+                    res = retrieve_analysis_context(dataset_id)
+                if res.empty:
+                    st.warning("No analysis context found in memory yet.")
+                else:
+                    st.text(res.content)
+
+    # ── Section 5: Why Memory Matters ──────────────────────────────────────
+    st.divider()
+    with st.expander("\u2139\ufe0f Why Memory Matters", expanded=False):
+        st.markdown(
+            """
+**AutoInsight-AI stores every analysis in a ChromaDB vector database.**
+
+On subsequent runs, the system retrieves relevant context from past analyses
+and feeds it to downstream agents. This enables:
+
+- **Richer reports** — the Reporter sees trends that span multiple runs.
+- **Grounded code generation** — the future Text-to-Code agent will use
+  retrieved insights to write more accurate data-science code.
+- **Conversational follow-ups** — ask questions and get answers that
+  reference your full analytical history.
+
+**Try it:** run the same dataset twice and compare the Report tab — the
+second run will show an "enriched with memory" banner.
+"""
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -544,6 +684,10 @@ def _render_result_tabs(result: dict[str, Any], df: pd.DataFrame) -> None:
     if result.get("report_markdown"):
         tab_names.append("📄 Report")
         tab_keys.append("report")
+    # Always offer Memory tab when dataset_id is present
+    if result.get("dataset_id"):
+        tab_names.append("🧠 Memory")
+        tab_keys.append("memory")
     if result.get("graph_trace"):
         tab_names.append("🔧 Diagnostics")
         tab_keys.append("diag")
@@ -565,6 +709,8 @@ def _render_result_tabs(result: dict[str, Any], df: pd.DataFrame) -> None:
                 _render_visualizations_tab(result, df)
             elif key == "report":
                 _render_report_tab(result)
+            elif key == "memory":
+                _render_memory_tab(result)
             elif key == "diag":
                 render_diagnostics_tab(result)
 

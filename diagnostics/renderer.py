@@ -478,6 +478,12 @@ _MEM_STATUS_STYLE: dict[str, str] = {
     "skipped": "background:#fef3c7;color:#92400e;border:1px solid #d97706;",
     "empty": "background:#f1f5f9;color:#475569;border:1px solid #94a3b8;",
 }
+_MEM_STATUS_BADGE: dict[str, str] = {
+    "success": "✅",
+    "failed": "❌",
+    "skipped": "⏭️",
+    "empty": "⬜",
+}
 
 
 def _render_memory_section(
@@ -509,11 +515,21 @@ def _render_memory_section(
         st.caption("No memory events recorded for this run.")
         return
 
+    # Summary counts
+    success_count = sum(1 for e in memory_trace if e.get("status") == "success")
+    failed_count = sum(1 for e in memory_trace if e.get("status") == "failed")
+    total = len(memory_trace)
+    if failed_count:
+        st.caption(f"{success_count}/{total} events succeeded · {failed_count} failed")
+    else:
+        st.caption(f"{total} event(s) — all successful")
+
     # Render each memory event as a compact pill row
     for evt in memory_trace:
         event_key = evt.get("event", "unknown")
         status = evt.get("status", "unknown")
         icon = _MEM_EVENT_ICON.get(event_key, "📦")
+        badge = _MEM_STATUS_BADGE.get(status, "❓")
         style = _MEM_STATUS_STYLE.get(status, "")
         chunks = evt.get("chunks", 0)
         message = evt.get("message", "")
@@ -526,7 +542,7 @@ def _render_memory_section(
         st.markdown(
             f'<div style="padding:6px 12px;border-radius:8px;margin:3px 0;'
             f'font-family:sans-serif;font-size:13px;{style}">'
-            f"<b>{icon} {label}</b>{col_str}{chunks_str}"
+            f"<b>{icon} {label}</b> {badge}{col_str}{chunks_str}"
             + (f"<br><span style='font-size:11px;opacity:0.8;'>{message}</span>" if message else "")
             + "</div>",
             unsafe_allow_html=True,
