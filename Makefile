@@ -40,6 +40,7 @@ run: ## Run the Streamlit app
 langfuse-up: ## Start LangFuse — auto-generates credentials on first run
 	uv run python scripts/setup_langfuse.py
 	docker compose -f docker-compose.langfuse.yml up -d
+	uv run python scripts/seed_langfuse_membership.py
 	@echo ""
 	@echo "  LangFuse UI → http://localhost:3001"
 	@echo "  Credentials → .env.langfuse (admin: admin@autoinsight.local)"
@@ -55,5 +56,6 @@ langfuse-reset: ## Destroy LangFuse data and rotate all credentials
 	rm -f .env.langfuse
 	uv run python scripts/setup_langfuse.py
 	docker compose -f docker-compose.langfuse.yml up -d
+	uv run python scripts/seed_langfuse_membership.py
 
 .PHONY: help install pre-commit lint format fix test check run langfuse-up langfuse-down langfuse-reset
