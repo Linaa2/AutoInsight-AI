@@ -78,6 +78,9 @@ class PipelineState(TypedDict, total=False):
     rag_summary: str  # human-readable summary of what was stored
     memory_trace: list[MemoryTraceEntry]  # one entry per memory interaction
 
+    # ---- external observability ----
+    langfuse_trace_id: str  # LangFuse trace ID for this run (empty when disabled)
+
     # ---- critic / self-correction (future) ----
     feedback: str
 

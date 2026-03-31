@@ -18,6 +18,7 @@ from diagnostics.renderer import render_diagnostics_tab, render_pipeline_diagram
 from orchestration.graph import _AGENTS_ORDER, stream_analysis
 from tools.data_loader import DataLoader, UnsupportedFormatError
 from tools.profiler_engine import DataProfiler
+from utils.langfuse_client import is_langfuse_enabled
 from utils.memory import ContextStore
 from visualization.executor import execute_chart
 
@@ -614,6 +615,31 @@ def _render_progressive_tabs(
 
 
 # ---------------------------------------------------------------------------
+# LangFuse sidebar status
+# ---------------------------------------------------------------------------
+
+
+def _render_langfuse_sidebar_status(result: dict[str, Any] | None) -> None:
+    """Render a compact LangFuse observability status card in the sidebar."""
+    enabled = is_langfuse_enabled()
+    if not enabled:
+        st.caption("🔴 LangFuse: disabled")
+        st.caption("Set `LANGFUSE_ENABLED=true` + keys to enable tracing.")
+        return
+
+    st.caption(f"🟢 LangFuse: enabled — [{settings.LANGFUSE_HOST}]({settings.LANGFUSE_HOST})")
+
+    if result:
+        trace_id = result.get("langfuse_trace_id", "")
+        if trace_id:
+            trace_url = f"{settings.LANGFUSE_HOST.rstrip('/')}/trace/{trace_id}"
+            st.caption(f"[🔍 View trace in LangFuse]({trace_url})")
+            st.caption(f"Trace ID: `{trace_id}`")
+        else:
+            st.caption("Trace ID: not captured")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -658,6 +684,10 @@ def main() -> None:
             did = result_for_sidebar.get("dataset_id", "")
             if did:
                 st.caption(f"Dataset: `{did}`")
+
+        # LangFuse observability status
+        st.divider()
+        _render_langfuse_sidebar_status(result_for_sidebar)
 
         # Rerun button — only when analysis is complete
         if st.session_state.get("analysis_result") is not None and not st.session_state.get(

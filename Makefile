@@ -37,4 +37,23 @@ ci: check typecheck ## Run all checks including type checking (for CI pipelines)
 run: ## Run the Streamlit app
 	uv run streamlit run app/main.py
 
-.PHONY: help install pre-commit lint format fix test check run
+langfuse-up: ## Start LangFuse — auto-generates credentials on first run
+	uv run python scripts/setup_langfuse.py
+	docker compose -f docker-compose.langfuse.yml up -d
+	@echo ""
+	@echo "  LangFuse UI → http://localhost:3001"
+	@echo "  Credentials → .env.langfuse (admin: admin@autoinsight.local)"
+	@echo ""
+
+langfuse-down: ## Stop LangFuse (data preserved)
+	docker compose -f docker-compose.langfuse.yml down
+
+langfuse-reset: ## Destroy LangFuse data and rotate all credentials
+	@echo "⚠  This will destroy all LangFuse traces and rotate credentials."
+	@read -p "   Continue? [y/N] " _c && [ "$$_c" = y ] || exit 1
+	docker compose -f docker-compose.langfuse.yml down -v
+	rm -f .env.langfuse
+	uv run python scripts/setup_langfuse.py
+	docker compose -f docker-compose.langfuse.yml up -d
+
+.PHONY: help install pre-commit lint format fix test check run langfuse-up langfuse-down langfuse-reset

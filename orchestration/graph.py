@@ -44,6 +44,7 @@ from diagnostics.telemetry import (
 )
 from orchestration.state import MemoryTraceEntry, NodeTraceEntry, PipelineState
 from tools.profiler_engine import DataProfiler
+from utils.langfuse_client import monitor as lf_monitor
 from visualization.schemas import VisualizerRequest
 
 logger = logging.getLogger(__name__)
@@ -105,53 +106,56 @@ def profiler_node(state: PipelineState) -> PipelineState:
     """
     t0 = time.time()
     res_before = collect_resource_snapshot()
-    try:
-        df = pd.DataFrame(state["df_dict"])
-        profiler = DataProfiler()
-        profile = profiler.profile(df)
+    callbacks = lf_monitor.get_llm_callbacks()
+    node_meta = {"dataset_id": state.get("dataset_id", ""), "file_name": state.get("file_name", "")}
+    with lf_monitor.node_span("profiler", metadata=node_meta):
+        try:
+            df = pd.DataFrame(state["df_dict"])
+            profiler = DataProfiler()
+            profile = profiler.profile(df)
 
-        agent = ProfilerAgent()
-        llm_start = time.time()
-        markdown = agent.describe(profile)
-        llm_end = time.time()
+            agent = ProfilerAgent()
+            llm_start = time.time()
+            markdown = agent.describe(profile, callbacks=callbacks)
+            llm_end = time.time()
 
-        res_after = collect_resource_snapshot()
-        telem = build_telemetry(
-            task="text",
-            llm_start=llm_start,
-            llm_end=llm_end,
-            resource_before=res_before,
-            resource_after=res_after,
-        )
-        entry = _trace_entry(
-            "profiler",
-            status="success",
-            started=t0,
-            keys_read=["df_dict"],
-            keys_written=["profile_data", "profile_markdown"],
-            summary=f"Profiled {profile.shape[0]} rows x {profile.shape[1]} cols",
-            telemetry=telem,
-        )
-        return {
-            "profile_data": profile.to_dict(),
-            "profile_markdown": markdown,
-            "graph_trace": _append_trace(state, entry),
-        }
-    except Exception as exc:
-        msg = f"Profiler failed: {exc}"
-        logger.exception(msg)
-        res_after = collect_resource_snapshot()
-        telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
-        entry = _trace_entry(
-            "profiler",
-            status="failed",
-            started=t0,
-            keys_read=["df_dict"],
-            keys_written=[],
-            error=msg,
-            telemetry=telem,
-        )
-        return {"error": msg, "graph_trace": _append_trace(state, entry)}
+            res_after = collect_resource_snapshot()
+            telem = build_telemetry(
+                task="text",
+                llm_start=llm_start,
+                llm_end=llm_end,
+                resource_before=res_before,
+                resource_after=res_after,
+            )
+            entry = _trace_entry(
+                "profiler",
+                status="success",
+                started=t0,
+                keys_read=["df_dict"],
+                keys_written=["profile_data", "profile_markdown"],
+                summary=f"Profiled {profile.shape[0]} rows x {profile.shape[1]} cols",
+                telemetry=telem,
+            )
+            return {
+                "profile_data": profile.to_dict(),
+                "profile_markdown": markdown,
+                "graph_trace": _append_trace(state, entry),
+            }
+        except Exception as exc:
+            msg = f"Profiler failed: {exc}"
+            logger.exception(msg)
+            res_after = collect_resource_snapshot()
+            telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
+            entry = _trace_entry(
+                "profiler",
+                status="failed",
+                started=t0,
+                keys_read=["df_dict"],
+                keys_written=[],
+                error=msg,
+                telemetry=telem,
+            )
+            return {"error": msg, "graph_trace": _append_trace(state, entry)}
 
 
 def analyst_node(state: PipelineState) -> PipelineState:
@@ -173,61 +177,65 @@ def analyst_node(state: PipelineState) -> PipelineState:
         )
         return {"graph_trace": _append_trace(state, entry)}
 
+    callbacks = lf_monitor.get_llm_callbacks()
+    node_meta = {"dataset_id": state.get("dataset_id", ""), "file_name": state.get("file_name", "")}
     res_before = collect_resource_snapshot()
-    try:
-        df = pd.DataFrame(state["df_dict"])
-        sample_text = df.head(5).to_string()
-        profile_data = state.get("profile_data")
+    with lf_monitor.node_span("analyst", metadata=node_meta):
+        try:
+            df = pd.DataFrame(state["df_dict"])
+            sample_text = df.head(5).to_string()
+            profile_data = state.get("profile_data")
 
-        agent = AnalystAgent()
-        llm_start = time.time()
-        result = agent.run(
-            profiler_output=profile_md,
-            sample_text=sample_text,
-            profile_data=profile_data,
-        )
-        llm_end = time.time()
+            agent = AnalystAgent()
+            llm_start = time.time()
+            result = agent.run(
+                profiler_output=profile_md,
+                sample_text=sample_text,
+                profile_data=profile_data,
+                callbacks=callbacks,
+            )
+            llm_end = time.time()
 
-        insights = result.get("insights", [])
-        insights_md = result.get("analyst_output", "")
+            insights = result.get("insights", [])
+            insights_md = result.get("analyst_output", "")
 
-        res_after = collect_resource_snapshot()
-        telem = build_telemetry(
-            task="text",
-            llm_start=llm_start,
-            llm_end=llm_end,
-            resource_before=res_before,
-            resource_after=res_after,
-        )
-        entry = _trace_entry(
-            "analyst",
-            status="success",
-            started=t0,
-            keys_read=["df_dict", "profile_data", "profile_markdown"],
-            keys_written=["insights", "insights_markdown"],
-            summary=f"Generated {len(insights)} insights",
-            telemetry=telem,
-        )
-        return {
-            "insights": insights,
-            "insights_markdown": insights_md,
-            "graph_trace": _append_trace(state, entry),
-        }
-    except Exception as exc:
-        msg = f"Analyst failed: {exc}"
-        logger.exception(msg)
-        res_after = collect_resource_snapshot()
-        telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
-        entry = _trace_entry(
-            "analyst",
-            status="failed",
-            started=t0,
-            keys_read=["df_dict", "profile_data", "profile_markdown"],
-            keys_written=[],
-            error=msg,
-            telemetry=telem,
-        )
-        return {"error": msg, "graph_trace": _append_trace(state, entry)}
+            res_after = collect_resource_snapshot()
+            telem = build_telemetry(
+                task="text",
+                llm_start=llm_start,
+                llm_end=llm_end,
+                resource_before=res_before,
+                resource_after=res_after,
+            )
+            entry = _trace_entry(
+                "analyst",
+                status="success",
+                started=t0,
+                keys_read=["df_dict", "profile_data", "profile_markdown"],
+                keys_written=["insights", "insights_markdown"],
+                summary=f"Generated {len(insights)} insights",
+                telemetry=telem,
+            )
+            return {
+                "insights": insights,
+                "insights_markdown": insights_md,
+                "graph_trace": _append_trace(state, entry),
+            }
+        except Exception as exc:
+            msg = f"Analyst failed: {exc}"
+            logger.exception(msg)
+            res_after = collect_resource_snapshot()
+            telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
+            entry = _trace_entry(
+                "analyst",
+                status="failed",
+                started=t0,
+                keys_read=["df_dict", "profile_data", "profile_markdown"],
+                keys_written=[],
+                error=msg,
+                telemetry=telem,
+            )
+            return {"error": msg, "graph_trace": _append_trace(state, entry)}
 
 
 def visualizer_node(state: PipelineState) -> PipelineState:
@@ -250,73 +258,75 @@ def visualizer_node(state: PipelineState) -> PipelineState:
         return {"graph_trace": _append_trace(state, entry)}
 
     insights_md = state.get("insights_markdown") or profile_md
-
+    callbacks = lf_monitor.get_llm_callbacks()
+    node_meta = {"dataset_id": state.get("dataset_id", ""), "file_name": state.get("file_name", "")}
     res_before = collect_resource_snapshot()
-    try:
-        df = pd.DataFrame(state["df_dict"])
-        columns_info = ", ".join(f"{col} ({dtype})" for col, dtype in df.dtypes.items())
-        request = VisualizerRequest(
-            profile_markdown=profile_md,
-            insights_markdown=insights_md,
-            columns_info=columns_info,
-        )
+    with lf_monitor.node_span("visualizer", metadata=node_meta):
+        try:
+            df = pd.DataFrame(state["df_dict"])
+            columns_info = ", ".join(f"{col} ({dtype})" for col, dtype in df.dtypes.items())
+            request = VisualizerRequest(
+                profile_markdown=profile_md,
+                insights_markdown=insights_md,
+                columns_info=columns_info,
+            )
 
-        llm_start = time.time()
-        result = run_visualization_pipeline(df, request)
-        llm_end = time.time()
+            llm_start = time.time()
+            result = run_visualization_pipeline(df, request, callbacks=callbacks)
+            llm_end = time.time()
 
-        serialised: dict[str, Any] = {
-            "raw_llm_output": result.raw_llm_output,
-            "parsing_error": result.parsing_error,
-            "charts": [
-                {
-                    "spec": dataclasses.asdict(rc.spec),
-                    "execution": {
-                        "success": rc.execution.success,
-                        "error": rc.execution.error,
-                    },
-                }
-                for rc in result.charts
-            ],
-        }
+            serialised: dict[str, Any] = {
+                "raw_llm_output": result.raw_llm_output,
+                "parsing_error": result.parsing_error,
+                "charts": [
+                    {
+                        "spec": dataclasses.asdict(rc.spec),
+                        "execution": {
+                            "success": rc.execution.success,
+                            "error": rc.execution.error,
+                        },
+                    }
+                    for rc in result.charts
+                ],
+            }
 
-        n_ok = sum(1 for rc in result.charts if rc.execution.success)
-        res_after = collect_resource_snapshot()
-        telem = build_telemetry(
-            task="code",
-            llm_start=llm_start,
-            llm_end=llm_end,
-            resource_before=res_before,
-            resource_after=res_after,
-        )
-        entry = _trace_entry(
-            "visualizer",
-            status="success",
-            started=t0,
-            keys_read=["df_dict", "profile_markdown", "insights_markdown"],
-            keys_written=["visualization_result"],
-            summary=f"{n_ok}/{len(result.charts)} charts rendered successfully",
-            telemetry=telem,
-        )
-        return {
-            "visualization_result": serialised,
-            "graph_trace": _append_trace(state, entry),
-        }
-    except Exception as exc:
-        msg = f"Visualizer failed: {exc}"
-        logger.exception(msg)
-        res_after = collect_resource_snapshot()
-        telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
-        entry = _trace_entry(
-            "visualizer",
-            status="failed",
-            started=t0,
-            keys_read=["df_dict", "profile_markdown", "insights_markdown"],
-            keys_written=[],
-            error=msg,
-            telemetry=telem,
-        )
-        return {"error": msg, "graph_trace": _append_trace(state, entry)}
+            n_ok = sum(1 for rc in result.charts if rc.execution.success)
+            res_after = collect_resource_snapshot()
+            telem = build_telemetry(
+                task="code",
+                llm_start=llm_start,
+                llm_end=llm_end,
+                resource_before=res_before,
+                resource_after=res_after,
+            )
+            entry = _trace_entry(
+                "visualizer",
+                status="success",
+                started=t0,
+                keys_read=["df_dict", "profile_markdown", "insights_markdown"],
+                keys_written=["visualization_result"],
+                summary=f"{n_ok}/{len(result.charts)} charts rendered successfully",
+                telemetry=telem,
+            )
+            return {
+                "visualization_result": serialised,
+                "graph_trace": _append_trace(state, entry),
+            }
+        except Exception as exc:
+            msg = f"Visualizer failed: {exc}"
+            logger.exception(msg)
+            res_after = collect_resource_snapshot()
+            telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
+            entry = _trace_entry(
+                "visualizer",
+                status="failed",
+                started=t0,
+                keys_read=["df_dict", "profile_markdown", "insights_markdown"],
+                keys_written=[],
+                error=msg,
+                telemetry=telem,
+            )
+            return {"error": msg, "graph_trace": _append_trace(state, entry)}
 
 
 def reporter_node(state: PipelineState) -> PipelineState:
@@ -341,70 +351,74 @@ def reporter_node(state: PipelineState) -> PipelineState:
         return {"graph_trace": _append_trace(state, entry)}
 
     res_before = collect_resource_snapshot()
-    try:
-        insights = state.get("insights")
-        viz_result = state.get("visualization_result")
+    callbacks = lf_monitor.get_llm_callbacks()
+    node_meta = {"dataset_id": state.get("dataset_id", ""), "file_name": state.get("file_name", "")}
+    with lf_monitor.node_span("reporter", metadata=node_meta):
+        try:
+            insights = state.get("insights")
+            viz_result = state.get("visualization_result")
 
-        agent = ReporterAgent()
-        llm_start = time.time()
-        result = agent.run(
-            profiler_output=profile_md or "",
-            analyst_output=insights_md or "",
-            insights=insights,
-            visualizer_output=viz_result,
-            rag_context=state.get("rag_analysis_context") or "",
-        )
-        llm_end = time.time()
+            agent = ReporterAgent()
+            llm_start = time.time()
+            result = agent.run(
+                profiler_output=profile_md or "",
+                analyst_output=insights_md or "",
+                insights=insights,
+                visualizer_output=viz_result,
+                rag_context=state.get("rag_analysis_context") or "",
+                callbacks=callbacks,
+            )
+            llm_end = time.time()
 
-        report = result.get("reporter_output", "")
+            report = result.get("reporter_output", "")
 
-        res_after = collect_resource_snapshot()
-        telem = build_telemetry(
-            task="text",
-            llm_start=llm_start,
-            llm_end=llm_end,
-            resource_before=res_before,
-            resource_after=res_after,
-        )
-        entry = _trace_entry(
-            "reporter",
-            status="success",
-            started=t0,
-            keys_read=[
-                "profile_markdown",
-                "insights",
-                "insights_markdown",
-                "visualization_result",
-                "rag_analysis_context",
-            ],
-            keys_written=["report_markdown"],
-            summary=f"Report generated ({len(report)} chars)",
-            telemetry=telem,
-        )
-        return {
-            "report_markdown": report,
-            "graph_trace": _append_trace(state, entry),
-        }
-    except Exception as exc:
-        msg = f"Reporter failed: {exc}"
-        logger.exception(msg)
-        res_after = collect_resource_snapshot()
-        telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
-        entry = _trace_entry(
-            "reporter",
-            status="failed",
-            started=t0,
-            keys_read=[
-                "profile_markdown",
-                "insights",
-                "insights_markdown",
-                "visualization_result",
-            ],
-            keys_written=[],
-            error=msg,
-            telemetry=telem,
-        )
-        return {"error": msg, "graph_trace": _append_trace(state, entry)}
+            res_after = collect_resource_snapshot()
+            telem = build_telemetry(
+                task="text",
+                llm_start=llm_start,
+                llm_end=llm_end,
+                resource_before=res_before,
+                resource_after=res_after,
+            )
+            entry = _trace_entry(
+                "reporter",
+                status="success",
+                started=t0,
+                keys_read=[
+                    "profile_markdown",
+                    "insights",
+                    "insights_markdown",
+                    "visualization_result",
+                    "rag_analysis_context",
+                ],
+                keys_written=["report_markdown"],
+                summary=f"Report generated ({len(report)} chars)",
+                telemetry=telem,
+            )
+            return {
+                "report_markdown": report,
+                "graph_trace": _append_trace(state, entry),
+            }
+        except Exception as exc:
+            msg = f"Reporter failed: {exc}"
+            logger.exception(msg)
+            res_after = collect_resource_snapshot()
+            telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
+            entry = _trace_entry(
+                "reporter",
+                status="failed",
+                started=t0,
+                keys_read=[
+                    "profile_markdown",
+                    "insights",
+                    "insights_markdown",
+                    "visualization_result",
+                ],
+                keys_written=[],
+                error=msg,
+                telemetry=telem,
+            )
+            return {"error": msg, "graph_trace": _append_trace(state, entry)}
 
 
 # ---------------------------------------------------------------------------
@@ -552,6 +566,13 @@ def rag_storage_node(state: PipelineState) -> PipelineState:
             else f"Nothing stored for dataset '{dataset_id}'"
         )
 
+        # Emit a LangFuse event summarising the memory operation
+        lf_monitor.log_event(
+            "rag-storage",
+            input={"dataset_id": dataset_id, "artifacts": stored_artifacts},
+            output={"stored": rag_stored, "total_chunks": total_chunks, "summary": rag_summary},
+        )
+
         res_after = collect_resource_snapshot()
         telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
         entry = _trace_entry(
@@ -662,11 +683,16 @@ def _make_initial_state(
     Computes ``dataset_id`` from the file name if not provided.
     Attempts a best-effort pre-load of prior RAG context so the reporter
     can optionally enrich its output with context from previous runs.
+    Also starts a LangFuse trace for the run and logs the RAG retrieval event.
     """
+    import uuid
+
     from utils.memory import ContextStore
 
     if not dataset_id:
         dataset_id = ContextStore.make_dataset_id(file_name)
+
+    run_id = str(uuid.uuid4())[:8]
 
     # Best-effort: retrieve prior analysis context for reporter enrichment
     rag_analysis_context = ""
@@ -680,11 +706,28 @@ def _make_initial_state(
     except Exception as exc:
         logger.debug(f"RAG pre-load skipped: {exc}")
 
+    # Best-effort: start a LangFuse trace for this analysis run
+    langfuse_trace_id = lf_monitor.begin_run(
+        dataset_id=dataset_id,
+        file_name=file_name,
+        run_id=run_id,
+    )
+    if langfuse_trace_id:
+        lf_monitor.log_event(
+            "rag-context-retrieval",
+            input={"dataset_id": dataset_id},
+            output={
+                "retrieved": bool(rag_analysis_context),
+                "context_chars": len(rag_analysis_context),
+            },
+        )
+
     return PipelineState(
         df_dict=df.to_dict(orient="records"),
         file_name=file_name,
         dataset_id=dataset_id,
         rag_analysis_context=rag_analysis_context,
+        langfuse_trace_id=langfuse_trace_id,
         graph_trace=[],
     )
 
@@ -710,8 +753,18 @@ def run_analysis(
     """
     graph = build_graph()
     initial_state = _make_initial_state(df, file_name, dataset_id)
-    result: PipelineState = graph.invoke(initial_state)
-    return result
+    try:
+        result: PipelineState = graph.invoke(initial_state)
+        lf_monitor.end_run(
+            status="success",
+            output={"nodes_run": len(result.get("graph_trace") or [])},
+        )
+        return result
+    except Exception:
+        lf_monitor.end_run(status="error")
+        raise
+    finally:
+        lf_monitor.flush()
 
 
 def stream_analysis(
@@ -732,5 +785,12 @@ def stream_analysis(
     """
     graph = build_graph()
     initial_state = _make_initial_state(df, file_name, dataset_id)
-    for chunk in graph.stream(initial_state, stream_mode="updates"):
-        yield from chunk.items()
+    try:
+        for chunk in graph.stream(initial_state, stream_mode="updates"):
+            yield from chunk.items()
+        lf_monitor.end_run(status="success")
+    except Exception:
+        lf_monitor.end_run(status="error")
+        raise
+    finally:
+        lf_monitor.flush()

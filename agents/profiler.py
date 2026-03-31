@@ -26,11 +26,12 @@ class ProfilerAgent:
         self._llm_client = llm_client or LLMClient()
         self._prompts = load_prompt_section("profiler")
 
-    def describe(self, profile: DataProfile) -> str:
+    def describe(self, profile: DataProfile, callbacks: list | None = None) -> str:
         """Generate a structured markdown description for *profile*.
 
         Args:
-            profile: The deterministic profile produced by :class:`DataProfiler`.
+            profile:   The deterministic profile produced by :class:`DataProfiler`.
+            callbacks: Optional LangChain callbacks (e.g. LangFuse handler).
 
         Returns:
             Markdown-formatted analysis string.
@@ -45,4 +46,4 @@ class ProfilerAgent:
             ]
         )
         chain = prompt | llm | StrOutputParser()
-        return chain.invoke({"profile_json": profile_json})
+        return chain.invoke({"profile_json": profile_json}, config={"callbacks": callbacks or []})

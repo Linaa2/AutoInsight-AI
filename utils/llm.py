@@ -90,15 +90,22 @@ def call_llm_with_messages(
     system: str,
     human: str,
     model: str | None = None,
+    callbacks: list | None = None,
 ) -> str:
     """Send a system+human message pair and return the model response.
 
     Legacy helper — prefer ``LLMClient`` + ``ChatPromptTemplate`` for new code.
+
+    Args:
+        system:    System prompt content.
+        human:     Human turn content.
+        model:     Optional model name override.
+        callbacks: Optional list of LangChain callbacks (e.g. LangFuse handler).
     """
     llm = LLMClient._build(model or settings.OLLAMA_TEXT_MODEL)
     messages = [SystemMessage(content=system), HumanMessage(content=human)]
     try:
-        response = llm.invoke(messages)
+        response = llm.invoke(messages, config={"callbacks": callbacks or []})
         return str(response.content)
     except Exception as exc:
         resolved = model or settings.OLLAMA_TEXT_MODEL
