@@ -86,6 +86,7 @@ class Settings:
     # -- Profiler --
     PROFILER_SAMPLE_ROWS: int = field(default_factory=lambda: _env_int("PROFILER_SAMPLE_ROWS", 5))
     PROFILER_TOP_VALUES: int = field(default_factory=lambda: _env_int("PROFILER_TOP_VALUES", 10))
+    PROFILER_DETAIL_MODE: str = field(default_factory=lambda: _env("PROFILER_DETAIL_MODE", "fast"))
 
     # -- Embeddings / ChromaDB --
     OLLAMA_EMBED_MODEL: str = field(

@@ -208,7 +208,7 @@ def build_langfuse_run_summary(result: dict[str, Any]) -> LangfuseRunSummary:
             totals = [
                 e.get("duration_s", 0)
                 for e in graph_trace
-                if isinstance(e.get("duration_s") | (int, float))
+                if isinstance(e.get("duration_s"), int | float)
             ]
             duration_s = round(sum(totals), 2) if totals else None
 
