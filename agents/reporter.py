@@ -103,19 +103,18 @@ class ReporterAgent:
         insights: list[dict] | None = None,
         visualizer_output: dict | None = None,
         rag_context: str = "",
+        callbacks: list | None = None,
     ) -> dict:
         """
         Generate the full analysis report.
 
         Args:
-            profiler_output: Profiler markdown output.
-            analyst_output: Analyst markdown output.
-            insights: Structured insight dicts (optional, enriches context).
+            profiler_output:  Profiler markdown output.
+            analyst_output:   Analyst markdown output.
+            insights:         Structured insight dicts (optional, enriches context).
             visualizer_output: Visualizer output dict with chart metadata (optional).
-            rag_context: Optional context retrieved from ChromaDB (previous runs).
-                         If provided and non-empty, appended as a supplementary
-                         block so the LLM can reference prior analyses.
-                         Reporter always works without it.
+            rag_context:      Optional context retrieved from ChromaDB (previous runs).
+            callbacks:        Optional LangChain callbacks (e.g. LangFuse handler).
 
         Returns:
             Dict with 'reporter_output' (str): the full markdown report.
@@ -141,7 +140,11 @@ class ReporterAgent:
                     + rag_context.strip()
                 )
 
-            raw = call_llm_with_messages(system=system_prompt, human=human_prompt)
+            raw = call_llm_with_messages(
+                system=system_prompt,
+                human=human_prompt,
+                callbacks=callbacks,
+            )
 
             logger.info(f"ReporterAgent: report generated ({len(raw)} chars)")
 

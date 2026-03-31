@@ -88,11 +88,12 @@ class VisualizerAgent:
             | StrOutputParser()
         )
 
-    def generate_raw(self, request: VisualizerRequest) -> str:
+    def generate_raw(self, request: VisualizerRequest, callbacks: list | None = None) -> str:
         """Call the LLM and return the unmodified response string.
 
         Args:
-            request: The fully populated :class:`VisualizerRequest`.
+            request:   The fully populated :class:`VisualizerRequest`.
+            callbacks: Optional LangChain callbacks (e.g. LangFuse handler).
 
         Returns:
             The raw text returned by the LLM (expected to be JSON).
@@ -103,7 +104,8 @@ class VisualizerAgent:
                 "profile_markdown": request.profile_markdown,
                 "insights_markdown": request.insights_markdown,
                 "allowed_chart_types": ", ".join(sorted(ALLOWED_CHART_TYPES)),
-            }
+            },
+            config={"callbacks": callbacks or []},
         )
 
     def generate(self, request: VisualizerRequest) -> VisualizerLLMOutput:
@@ -131,6 +133,7 @@ def run_visualization_pipeline(
     df: pd.DataFrame,
     request: VisualizerRequest,
     llm: BaseChatModel | None = None,
+    callbacks: list | None = None,
 ) -> VisualizationPipelineResult:
     """Run the full visualization pipeline and return structured results.
 
@@ -144,9 +147,10 @@ def run_visualization_pipeline(
     code execution errors) are captured and surfaced in the return value.
 
     Args:
-        df:      The dataset as a pandas DataFrame.
-        request: The pre-built :class:`VisualizerRequest`.
-        llm:     Optional pre-built LangChain chat model (passed to the agent).
+        df:        The dataset as a pandas DataFrame.
+        request:   The pre-built :class:`VisualizerRequest`.
+        llm:       Optional pre-built LangChain chat model (passed to the agent).
+        callbacks: Optional LangChain callbacks (e.g. LangFuse handler).
 
     Returns:
         A :class:`VisualizationPipelineResult` with ``charts``,
@@ -155,7 +159,7 @@ def run_visualization_pipeline(
     agent = VisualizerAgent(llm=llm)
 
     try:
-        raw_output = agent.generate_raw(request)
+        raw_output = agent.generate_raw(request, callbacks=callbacks)
     except RuntimeError as exc:
         return VisualizationPipelineResult(
             charts=[],

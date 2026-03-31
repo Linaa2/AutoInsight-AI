@@ -351,6 +351,7 @@ class AnalystAgent:
         profiler_output: str,
         sample_text: str,
         profile_data: dict | None = None,
+        callbacks: list | None = None,
     ) -> dict:
         """
         Execute the full analyst pipeline.
@@ -359,12 +360,15 @@ class AnalystAgent:
             profiler_output: Profiler markdown output.
             sample_text: Dataset sample as text.
             profile_data: Structured profile dict (optional).
+            callbacks: Optional LangChain callbacks (e.g. LangFuse handler).
 
         Returns:
             Dict with 'analyst_output' (markdown) and 'insights' (list[dict]).
         """
         try:
-            insights = self._generate(profiler_output, sample_text, profile_data)
+            insights = self._generate(
+                profiler_output, sample_text, profile_data, callbacks=callbacks
+            )
             insights = self.categorizer.categorize_all(insights)
             markdown = self.formatter.to_markdown(insights)
 
@@ -388,6 +392,7 @@ class AnalystAgent:
         profiler_output: str,
         sample_text: str,
         profile_data: dict | None = None,
+        callbacks: list | None = None,
     ) -> list[dict]:
         """Call the LLM (text model) to generate raw insights."""
         # profile_data["shape"] may be [rows, cols] (list) or {"rows": …, "cols": …} (dict).
@@ -415,7 +420,7 @@ class AnalystAgent:
         )
 
         # Use the team's call_llm_with_messages (text model by default)
-        raw = call_llm_with_messages(system=system_prompt, human=human_prompt)
+        raw = call_llm_with_messages(system=system_prompt, human=human_prompt, callbacks=callbacks)
 
         return self._parse_response(raw)
 

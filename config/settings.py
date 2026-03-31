@@ -56,6 +56,13 @@ def _env_int(key: str, default: int) -> int:
     return int(os.getenv(key, str(default)))
 
 
+def _env_bool(key: str, default: bool) -> bool:
+    val = os.getenv(key)
+    if val is None:
+        return default
+    return val.strip().lower() in ("true", "1", "yes")
+
+
 @dataclass(frozen=True)
 class Settings:
     """Immutable runtime configuration.
@@ -93,6 +100,16 @@ class Settings:
 
     # -- App --
     APP_TITLE: str = field(default_factory=lambda: _env("APP_TITLE", "AutoInsight AI"))
+
+    # -- LangFuse external observability (optional) --
+    LANGFUSE_ENABLED: bool = field(default_factory=lambda: _env_bool("LANGFUSE_ENABLED", False))
+    LANGFUSE_HOST: str = field(
+        default_factory=lambda: _env("LANGFUSE_HOST", "http://localhost:3001")
+    )
+    LANGFUSE_PUBLIC_KEY: str = field(default_factory=lambda: _env("LANGFUSE_PUBLIC_KEY", ""))
+    LANGFUSE_SECRET_KEY: str = field(default_factory=lambda: _env("LANGFUSE_SECRET_KEY", ""))
+    LANGFUSE_ENV: str = field(default_factory=lambda: _env("LANGFUSE_ENV", "development"))
+    LANGFUSE_RELEASE: str = field(default_factory=lambda: _env("LANGFUSE_RELEASE", ""))
 
 
 #: Module-level singleton — import ``settings`` everywhere.

@@ -1,0 +1,67 @@
+# docker-compose.langfuse.yml — Self-hosted LangFuse for AutoInsight AI
+# ─────────────────────────────────────────────────────────────────────────
+# ✅  FULLY AUTOMATED — no manual account creation needed.
+#
+# Usage (recommended — auto-generates credentials on first run):
+#   make langfuse-up           # start (generates .env.langfuse if missing)
+#   make langfuse-down         # stop
+#   make langfuse-reset        # destroy data + rotate credentials
+#
+# Or run Docker Compose directly (requires .env.langfuse to already exist):
+#   python scripts/setup_langfuse.py    # generate credentials first
+#   docker compose -f docker-compose.langfuse.yml up -d
+#
+# How it works
+# ─────────────────────────────────────────────────────────────────────────
+# `scripts/setup_langfuse.py` generates .env.langfuse once (idempotent).
+# This file contains LANGFUSE_INIT_* variables that tell LangFuse to seed
+# an organisation, project, and API key pair on first startup — no UI
+# interaction required.  The same public/secret keys are written to the
+# project .env so the Python app connects automatically.
+# ─────────────────────────────────────────────────────────────────────────
+
+services:
+  # PostgreSQL database used by LangFuse to store traces and metadata.
+  langfuse-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    ports:
+      # Exposed on 5433 to avoid clashing with a local Postgres on 5432.
+      - "5433:5432"
+    volumes:
+      - langfuse_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # LangFuse application server.
+  langfuse:
+    image: langfuse/langfuse:2
+    restart: unless-stopped
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    ports:
+      # UI + API available at http://localhost:3001
+      - "3001:3000"
+    # All generated secrets (NEXTAUTH_SECRET, SALT, LANGFUSE_INIT_*) are
+    # injected from .env.langfuse — created by `scripts/setup_langfuse.py`.
+    env_file:
+      - .env.langfuse
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      NEXTAUTH_URL: http://localhost:3001
+      # Disable LangFuse telemetry for self-hosted setup
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+      # NEXTAUTH_SECRET, SALT and LANGFUSE_INIT_* are provided by env_file above.
+
+volumes:
+  langfuse_pgdata:
+    name: autoinsight_langfuse_pgdata
