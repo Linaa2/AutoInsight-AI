@@ -35,6 +35,7 @@ from langgraph.graph import END, START, StateGraph
 from agents.analyst import AnalystAgent
 from agents.profiler import ProfilerAgent
 from agents.reporter import ReporterAgent
+from agents.uncertainty import UncertaintyEstimator
 from agents.visualizer import run_visualization_pipeline
 from diagnostics.telemetry import (
     NodeTelemetry,
@@ -49,8 +50,8 @@ from visualization.schemas import VisualizerRequest
 
 logger = logging.getLogger(__name__)
 
-_AGENTS_ORDER = ["profiler", "analyst", "visualizer", "reporter"]
 _DF_REGISTRY: dict[str, pd.DataFrame] = {}
+_AGENTS_ORDER = ["profiler", "analyst", "uncertainty", "visualizer", "reporter"]
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +287,79 @@ def analyst_node(state: PipelineState) -> PipelineState:
             return {"error": msg, "graph_trace": _append_trace(state, entry)}
 
 
+def uncertainty_node(state: PipelineState) -> PipelineState:
+    """Score each analyst insight with a 0-100% confidence estimate.
+
+    Reads:  ``insights``, ``critiques`` (optional), ``profile_data``
+    Writes: ``confidence_scores``, ``uncertainty_output``
+    """
+    t0 = time.time()
+    insights: list[dict[str, Any]] = state.get("insights") or []
+
+    if not insights:
+        entry = _trace_entry(
+            "uncertainty",
+            status="skipped",
+            started=t0,
+            keys_read=["insights"],
+            keys_written=[],
+            summary="Skipped — no insights to score",
+        )
+        return {"graph_trace": _append_trace(state, entry)}
+
+    critiques: list[dict[str, Any]] = state.get("critiques") or []
+    profile_data: dict[str, Any] = state.get("profile_data") or {}
+    callbacks = lf_monitor.get_llm_callbacks()
+    node_meta = {"dataset_id": state.get("dataset_id", ""), "file_name": state.get("file_name", "")}
+    res_before = collect_resource_snapshot()
+
+    with lf_monitor.node_span("uncertainty", metadata=node_meta):
+        try:
+            estimator = UncertaintyEstimator()
+            llm_start = time.time()
+            result = estimator.estimate_all(insights, critiques, profile_data, callbacks)
+            llm_end = time.time()
+
+            scores: list[dict[str, Any]] = result["confidence_scores"]
+            res_after = collect_resource_snapshot()
+            telem = build_telemetry(
+                task="text",
+                llm_start=llm_start,
+                llm_end=llm_end,
+                resource_before=res_before,
+                resource_after=res_after,
+            )
+            entry = _trace_entry(
+                "uncertainty",
+                status="success",
+                started=t0,
+                keys_read=["insights", "critiques", "profile_data"],
+                keys_written=["confidence_scores", "uncertainty_output"],
+                summary=f"Scored {len(scores)} insights",
+                telemetry=telem,
+            )
+            return {
+                "confidence_scores": scores,
+                "uncertainty_output": result["uncertainty_output"],
+                "graph_trace": _append_trace(state, entry),
+            }
+        except Exception as exc:
+            msg = f"UncertaintyEstimator failed: {exc}"
+            logger.exception(msg)
+            res_after = collect_resource_snapshot()
+            telem = build_telemetry_no_llm(resource_before=res_before, resource_after=res_after)
+            entry = _trace_entry(
+                "uncertainty",
+                status="failed",
+                started=t0,
+                keys_read=["insights", "critiques", "profile_data"],
+                keys_written=[],
+                error=msg,
+                telemetry=telem,
+            )
+            return {"error": msg, "graph_trace": _append_trace(state, entry)}
+
+
 def visualizer_node(state: PipelineState) -> PipelineState:
     """Propose and execute charts based on the profile and insights.
 
@@ -465,6 +539,7 @@ def reporter_node(state: PipelineState) -> PipelineState:
                 insights=insights,
                 visualizer_output=viz_result,
                 rag_context=rag_context,
+                uncertainty_output=state.get("uncertainty_output") or "",
                 callbacks=callbacks,
             )
             llm_end = time.time()
@@ -743,6 +818,8 @@ def _get_node_action(node_name: str):
                 return profiler_node
             case "analyst":
                 return analyst_node
+            case "uncertainty":
+                return uncertainty_node
             case "visualizer":
                 return visualizer_node
             case "reporter":

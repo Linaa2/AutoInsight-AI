@@ -110,6 +110,7 @@ class ReporterAgent:
         insights: list[dict] | None = None,
         visualizer_output: dict | None = None,
         rag_context: str = "",
+        uncertainty_output: str = "",
         callbacks: list | None = None,
     ) -> dict:
         """
@@ -145,6 +146,15 @@ class ReporterAgent:
                     "The following is relevant context retrieved from a previous run "
                     "on this dataset. Use it only if it adds value to the current report.\n\n"
                     + rag_context.strip()
+                )
+
+            # Append uncertainty confidence scores when available
+            if uncertainty_output and uncertainty_output.strip():
+                human_prompt += (
+                    "\n\n## 🎯 Insight Confidence Scores\n"
+                    "The following table shows the data-driven confidence level for each "
+                    "insight. When writing the Key Insights section, qualify insights with "
+                    "low or medium confidence accordingly.\n\n" + uncertainty_output.strip()
                 )
 
             raw = call_llm_with_messages(

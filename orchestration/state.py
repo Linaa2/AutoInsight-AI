@@ -83,6 +83,14 @@ class PipelineState(TypedDict, total=False):
     # ---- external observability ----
     langfuse_trace_id: str  # LangFuse trace ID for this run (empty when disabled)
 
+    # ---- critic outputs (Phase 8 — CriticAgent) ----
+    critiques: list[dict[str, Any]]  # one critique dict per insight
+    critic_output: str  # markdown critique summary
+
+    # ---- uncertainty outputs (Phase 8 — UncertaintyEstimator) ----
+    confidence_scores: list[dict[str, Any]]  # one confidence score dict per insight
+    uncertainty_output: str  # markdown confidence table
+
     # ---- critic / self-correction (future) ----
     feedback: str
 
