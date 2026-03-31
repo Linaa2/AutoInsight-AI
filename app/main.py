@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 import streamlit as st
 from streamlit_lottie import st_lottie
 
+from app.langfuse_view import build_langfuse_run_summary
 from app.memory_view import (
     CATEGORY_ICONS,
     INSIGHT_CATEGORIES,
@@ -644,6 +645,232 @@ second run will show an "enriched with memory" banner.
 
 
 # ---------------------------------------------------------------------------
+# Observability tab
+# ---------------------------------------------------------------------------
+
+_OBS_NODE_ORDER = ["profiler", "analyst", "visualizer", "reporter", "rag_storage"]
+_OBS_STATUS_EMOJI: dict[str, str] = {
+    "success": "✅",
+    "failed": "❌",
+    "skipped": "⏭️",
+    "unknown": "❓",
+}
+
+
+def _render_observability_tab(result: dict[str, Any]) -> None:
+    """Render the 🔭 Observability tab — LangFuse showcase panel."""
+    summary = build_langfuse_run_summary(result)
+
+    # ── 1. LangFuse Status Card ───────────────────────────────────────────
+    st.markdown("### 🔭 LangFuse Observability Status")
+    if not summary.enabled:
+        st.warning(
+            "**LangFuse is disabled.** Set `LANGFUSE_ENABLED=true` and provide "
+            "`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` in your `.env` to enable "
+            "full GenAI tracing. Run `make langfuse-up` to start a local instance."
+        )
+        st.caption("The analysis ran successfully — LangFuse adds *external* observability on top.")
+    elif summary.trace_id:
+        st.success(
+            f"✅ **LangFuse active** — host: [{summary.host}]({summary.host}) | Trace captured ✓"
+        )
+        col_a, col_b, col_c = st.columns(3)
+        col_a.metric("Host", summary.host or "—")
+        col_b.metric("Trace ID", f"`{summary.trace_id}`")
+        col_c.metric("Dataset", summary.dataset_id or "—")
+    else:
+        st.error(
+            "LangFuse is enabled but no trace ID was captured for this run. "
+            "Check that the LangFuse server is reachable at "
+            f"[{summary.host}]({summary.host}) and restart the analysis."
+        )
+
+    # ── 2. Run Summary ────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### 📊 Run Summary")
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Status", summary.status.capitalize())
+    m2.metric("Duration", f"{summary.duration_s:.1f}s" if summary.duration_s else "—")
+    m3.metric("✅ Succeeded", summary.nodes_succeeded)
+    m4.metric("❌ Failed", summary.nodes_failed)
+    m5.metric("⏭️ Skipped", summary.nodes_skipped)
+
+    if summary.started_at:
+        st.caption(f"Run started: `{summary.started_at}`")
+    if summary.dataset_id:
+        st.caption(f"Dataset: `{summary.dataset_id}` · File: `{summary.file_name or '—'}`")
+
+    # ── 3. Open in LangFuse ───────────────────────────────────────────────
+    st.divider()
+    st.markdown("### 🔗 Open in LangFuse")
+
+    if summary.trace_url:
+        st.link_button(
+            "🚀 Open this run in LangFuse",
+            summary.trace_url,
+            use_container_width=True,
+        )
+        st.caption(
+            "This link opens the **complete trace** in LangFuse — all agent spans, "
+            "prompt texts, LLM responses, latency data, and token counts are there. "
+            "Click any span to inspect the exact prompt that was sent to the model."
+        )
+    elif summary.trace_id:
+        st.code(summary.trace_id, language=None)
+        st.caption(
+            "Copy this trace ID and search for it in LangFuse "
+            f"([{summary.host}]({summary.host})) to inspect the full trace."
+        )
+    elif summary.enabled:
+        st.info("No trace ID captured for this run — start a new analysis to generate one.")
+    else:
+        with st.expander("\u2139\ufe0f How to enable LangFuse", expanded=False):
+            st.markdown(
+                """
+1. Start a local LangFuse instance: `make langfuse-up`
+2. Open the LangFuse UI at **http://localhost:3001**
+3. Set `LANGFUSE_ENABLED=true` in your `.env`
+4. Re-run the analysis — a clickable trace link will appear here.
+"""
+            )
+
+    # ── 4. Node-Level Execution Table ─────────────────────────────────────
+    st.divider()
+    st.markdown("### ⚙️ Node Execution Summary")
+
+    if summary.node_summaries:
+        # Column headers
+        hcols = st.columns([2, 1, 1, 3, 3])
+        hcols[0].markdown("**Node**")
+        hcols[1].markdown("**Status**")
+        hcols[2].markdown("**Duration**")
+        hcols[3].markdown("**Model**")
+        hcols[4].markdown("**Outcome**")
+        st.markdown("---")
+
+        ordered = sorted(
+            summary.node_summaries,
+            key=lambda n: (
+                _OBS_NODE_ORDER.index(n.node_name) if n.node_name in _OBS_NODE_ORDER else 99
+            ),
+        )
+        for node in ordered:
+            badge = _OBS_STATUS_EMOJI.get(node.status, "❓")
+            dur_str = f"{node.duration_s:.1f}s" if node.duration_s is not None else "—"
+            if node.model_name:
+                model_str = f"`{node.model_name}`"
+                if node.provider:
+                    model_str += f" ({node.provider})"
+            else:
+                model_str = "—"
+
+            row = st.columns([2, 1, 1, 3, 3])
+            row[0].markdown(f"**{node.node_name}**")
+            row[1].markdown(badge)
+            row[2].markdown(dur_str)
+            row[3].markdown(model_str)
+            row[4].markdown(node.summary or "—")
+
+            if node.error:
+                st.error(f"**{node.node_name}** failed: {node.error}")
+
+        st.caption(
+            "Each row above corresponds to a **LangFuse span** inside the trace. "
+            "Open the trace link to inspect prompts, model responses, and token usage."
+        )
+    else:
+        st.caption("No node execution data available.")
+
+    # ── 5. RAG / Memory Observability ─────────────────────────────────────
+    st.divider()
+    st.markdown("### 🧠 RAG / Memory Observability")
+
+    rag1, rag2, rag3 = st.columns(3)
+    rag1.metric("Memory Events", summary.memory_events_count)
+    rag2.metric("Stored to DB", "Yes ✅" if summary.memory_stored else "No")
+    rag3.metric("Prior Context", "Found ✅" if summary.rag_context_found else "Not found")
+
+    if summary.memory_collections:
+        st.caption(
+            "Collections written: " + ", ".join(f"`{c}`" for c in summary.memory_collections)
+        )
+    if summary.memory_events_summary:
+        st.caption(summary.memory_events_summary)
+
+    if summary.rag_context_found:
+        st.info(
+            "📚 Prior analysis context was **retrieved from ChromaDB** and injected into "
+            "the Reporter — this retrieval event is logged as a `rag-context-retrieval` span "
+            "in LangFuse. Open the trace to verify what context was found and how it "
+            "influenced the report."
+        )
+    else:
+        st.caption(
+            "💡 No prior context found for this dataset. Run the analysis a **second time** "
+            "on the same file to see the full RAG retrieval flow traced in LangFuse."
+        )
+
+    # ── 6. Why LangFuse Matters ───────────────────────────────────────────
+    st.divider()
+    with st.expander("\u2139\ufe0f Why LangFuse Matters for GenAI Systems", expanded=False):
+        st.markdown(
+            """
+**LangFuse provides end-to-end observability that local diagnostics cannot.**
+
+| Capability | Local Diagnostics | LangFuse |
+|---|:---:|:---:|
+| Per-node timing | ✅ | ✅ |
+| Resource usage (CPU/RAM/GPU) | ✅ | — |
+| Full prompt text | — | ✅ |
+| Full LLM response | — | ✅ |
+| Token cost tracking | — | ✅ |
+| Multi-run history | — | ✅ |
+| Cross-run comparison | — | ✅ |
+| RAG retrieval tracing | Partial | ✅ |
+| Shareable run links | — | ✅ |
+
+**In a production GenAI system, LangFuse lets you:**
+- Debug prompt quality issues without re-running the pipeline
+- Identify latency bottlenecks at the model-call level
+- Verify that RAG context retrieval is working correctly
+- Compare traces before and after a prompt change
+- Monitor token costs over time
+
+**In this project:** every analysis run is a single top-level trace.
+Each agent node is a child span. RAG retrieval, storage events, and
+model calls are all nested inside that trace — making the entire
+multi-agent pipeline fully inspectable in one place.
+"""
+        )
+
+    # ── 7. Raw Identifiers (developer expander) ───────────────────────────
+    with st.expander("🛠️ Developer: Raw Run Identifiers", expanded=False):
+        id_rows = {
+            "trace_id": summary.trace_id or "N/A",
+            "dataset_id": summary.dataset_id or "N/A",
+            "file_name": summary.file_name or "N/A",
+            "langfuse_host": summary.host or "N/A (LangFuse disabled)",
+            "trace_url": summary.trace_url or "N/A",
+        }
+        for k, v in id_rows.items():
+            st.code(f"{k}: {v}", language=None)
+
+        if summary.node_summaries:
+            st.markdown("**Node statuses:**")
+            ordered_dev = sorted(
+                summary.node_summaries,
+                key=lambda n: (
+                    _OBS_NODE_ORDER.index(n.node_name) if n.node_name in _OBS_NODE_ORDER else 99
+                ),
+            )
+            for node in ordered_dev:
+                dur_str = f"{node.duration_s:.2f}s" if node.duration_s is not None else "?"
+                model_str = node.model_name or "no model"
+                st.caption(f"**{node.node_name}**: {node.status} · {dur_str} · {model_str}")
+
+
+# ---------------------------------------------------------------------------
 # Cancelled / result / progressive renderers
 # ---------------------------------------------------------------------------
 
@@ -688,6 +915,11 @@ def _render_result_tabs(result: dict[str, Any], df: pd.DataFrame) -> None:
     if result.get("dataset_id"):
         tab_names.append("🧠 Memory")
         tab_keys.append("memory")
+    # Observability tab: always show when graph_trace is present (useful
+    # regardless of LangFuse enabled state — shows node table + status)
+    if result.get("graph_trace") or result.get("langfuse_trace_id"):
+        tab_names.append("🔭 Observability")
+        tab_keys.append("obs")
     if result.get("graph_trace"):
         tab_names.append("🔧 Diagnostics")
         tab_keys.append("diag")
@@ -711,6 +943,8 @@ def _render_result_tabs(result: dict[str, Any], df: pd.DataFrame) -> None:
                 _render_report_tab(result)
             elif key == "memory":
                 _render_memory_tab(result)
+            elif key == "obs":
+                _render_observability_tab(result)
             elif key == "diag":
                 render_diagnostics_tab(result)
 
