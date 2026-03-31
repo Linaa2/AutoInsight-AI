@@ -35,8 +35,10 @@ The `graph/` package re-exports from `orchestration/` for backward compatibility
 ```python
 class PipelineState(TypedDict, total=False):
     # inputs
-    df_dict: list[dict[str, Any]]
+    df_ref: str
+    df_dict: list[dict[str, Any]]  # backward-compatible fallback
     file_name: str
+    dataset_id: str
     # profiler
     profile_data: dict[str, Any]
     profile_markdown: str
@@ -47,6 +49,11 @@ class PipelineState(TypedDict, total=False):
     visualization_result: dict[str, Any]
     # reporter
     report_markdown: str
+    # memory / rag
+    rag_analysis_context: str
+    rag_stored: bool
+    rag_summary: str
+    memory_trace: list[MemoryTraceEntry]
     # diagnostics
     graph_trace: list[NodeTraceEntry]
     error: str
@@ -55,7 +62,7 @@ class PipelineState(TypedDict, total=False):
 ### Graph Flow
 
 ```
-START → profiler_node → analyst_node → visualizer_node → reporter_node → END
+START → profiler_node → analyst_node → visualizer_node → reporter_node → rag_storage_node → END
 ```
 
 Each node:

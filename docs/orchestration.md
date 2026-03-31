@@ -25,8 +25,10 @@ All fields are optional so that each node only returns the keys it produces.
 
 ```python
 class PipelineState(TypedDict, total=False):
-    df_dict: list[dict[str, Any]]        # JSON-safe dataset
+    df_ref: str                          # in-process DataFrame handle (preferred)
+    df_dict: list[dict[str, Any]]        # legacy JSON-safe fallback
     file_name: str
+    dataset_id: str
 
     # Profiler
     profile_data: dict[str, Any]         # raw DataProfile.to_dict()
@@ -38,26 +40,33 @@ class PipelineState(TypedDict, total=False):
     # Visualizer
     visualization_result: dict[str, Any] # serialised chart specs + metadata
 
-    # Reporter (future)
-    report: str
+    # Reporter
+    report_markdown: str
 
-    # Critic (future)
-    feedback: str
+    # RAG / memory
+    rag_analysis_context: str
+    rag_stored: bool
+    rag_summary: str
+    memory_trace: list[dict[str, Any]]
 
     # Diagnostics
+    graph_trace: list[dict[str, Any]]
     error: str
 ```
 
-**Why `df_dict` instead of `DataFrame`?** LangGraph serialises state for
-checkpointing. A list-of-dicts is JSON-safe. Nodes reconstruct the DataFrame
-locally via `pd.DataFrame(state["df_dict"])`.
+**Why `df_ref`?** For the normal app path, the DataFrame is registered once in
+process and nodes access it by lightweight reference. This avoids repeated
+`to_dict()` / `DataFrame(...)` conversions on large datasets.
+
+**Why keep `df_dict`?** Backward compatibility: external callers can still
+invoke the graph with a JSON-safe dataset payload when needed.
 
 ---
 
 ## Current graph
 
 ```
-START → profiler_node → visualizer_node → END
+START → profiler_node → analyst_node → visualizer_node → reporter_node → rag_storage_node → END
 ```
 
 ### profiler_node
@@ -67,14 +76,29 @@ START → profiler_node → visualizer_node → END
 3. Runs `ProfilerAgent().describe(profile)` (LLM markdown).
 4. Writes `profile_data` and `profile_markdown`.
 
+### analyst_node
+
+1. Reads `profile_markdown`, `profile_data`, and a small data sample.
+2. Runs `AnalystAgent().run(...)`.
+3. Writes `insights` and `insights_markdown`.
+
 ### visualizer_node
 
 1. Reads `profile_markdown` and `insights_markdown`.
-2. If `insights_markdown` is absent, falls back to `profile_markdown`
-   (useful for testing before the Analyst agent exists).
-3. Runs `run_visualization_pipeline(df, request)`.
-4. Serialises the result (without Plotly figure objects) into
-   `visualization_result`.
+2. Runs `run_visualization_pipeline(df, request)`.
+3. Serialises chart specs plus execution metadata into `visualization_result`.
+
+### reporter_node
+
+1. Reads profiler / analyst / visualizer outputs.
+2. Retrieves prior RAG context on demand (best-effort) right before report generation.
+3. Runs `ReporterAgent().run(...)`.
+4. Writes `report_markdown` and, when available, `rag_analysis_context`.
+
+### rag_storage_node
+
+1. Stores profile / insights / report outputs in ChromaDB (best-effort).
+2. Records one `MemoryTraceEntry` per storage action.
 
 ---
 

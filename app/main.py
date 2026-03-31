@@ -10,6 +10,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any
 
+import plotly.io as pio
 import streamlit as st
 from streamlit_lottie import st_lottie
 
@@ -24,7 +25,8 @@ from app.memory_view import (
 )
 from config.settings import REPO_ROOT, settings
 from diagnostics.renderer import render_diagnostics_tab, render_pipeline_diagram
-from orchestration.graph import _AGENTS_ORDER, stream_analysis
+from orchestration.graph import _AGENTS_ORDER as _CONTENT_AGENT_ORDER
+from orchestration.graph import stream_analysis
 from tools.data_loader import DataLoader, UnsupportedFormatError
 from tools.profiler_engine import DataProfiler
 from utils.langfuse_client import is_langfuse_enabled
@@ -50,7 +52,14 @@ _AGENT_META: dict[str, dict[str, str]] = {
     "analyst": {"icon": "💡", "label": "Analyst", "verb": "Generating insights…"},
     "visualizer": {"icon": "📈", "label": "Visualizer", "verb": "Creating charts…"},
     "reporter": {"icon": "📄", "label": "Reporter", "verb": "Writing report…"},
+    "rag_storage": {
+        "icon": "🧠",
+        "label": "RAG Storage",
+        "verb": "Persisting analysis to memory…",
+    },
 }
+_PIPELINE_STATUS_ORDER = [*_CONTENT_AGENT_ORDER, "rag_storage"]
+_TERMINAL_NODE_STATUSES = {"success", "failed", "skipped"}
 
 _STATUS_BADGE = {"success": "✅", "failed": "❌", "skipped": "⏭️"}
 _PRIORITY_ICONS = {"high": "🔴", "medium": "🟡", "low": "🟢"}
@@ -142,11 +151,15 @@ def _cancel_analysis() -> None:
 
 
 def _merge_state(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
-    """Merge a node update into the cumulative state, appending graph_trace."""
+    """Merge a node update into the cumulative state.
+
+    Streamed LangGraph node updates already contain cumulative ``graph_trace`` /
+    ``memory_trace`` values, so those keys must be replaced rather than appended.
+    """
     merged = dict(base)
     for key, value in update.items():
-        if key == "graph_trace" and key in merged:
-            merged[key] = list(merged[key]) + list(value)
+        if key in {"graph_trace", "memory_trace"}:
+            merged[key] = list(value)
         else:
             merged[key] = value
     return merged
@@ -170,6 +183,10 @@ def _render_html_pipeline_status(
     """
     dur_map = {e["node"]: e.get("duration_s", 0.0) for e in trace if "node" in e}
     status_map = {e["node"]: e.get("status", "pending") for e in trace if "node" in e}
+    last_stage = _PIPELINE_STATUS_ORDER[-1]
+    pipeline_finished = status_map.get(last_stage) in _TERMINAL_NODE_STATUSES or last_stage in set(
+        completed
+    )
 
     _STYLE: dict[str, tuple[str, str, str, str]] = {
         #             bg        border    color     border-style
@@ -192,7 +209,7 @@ def _render_html_pipeline_status(
     )
 
     prev_done = True  # START is always considered "done"
-    for agent_id in _AGENTS_ORDER:
+    for agent_id in _PIPELINE_STATUS_ORDER:
         meta = _AGENT_META[agent_id]
         status = status_map.get(agent_id, "pending")
         if agent_id == current_agent and status == "pending":
@@ -219,13 +236,13 @@ def _render_html_pipeline_status(
             f'<div style="font-size:11px;margin-top:4px;">{badge} {status.capitalize()} · {dur_str}</div>'
             f"</div>"
         )
-        prev_done = status == "success"
+        prev_done = status in _TERMINAL_NODE_STATUSES
 
     # END sentinel edge + node
-    end_col = "#059669" if "reporter" in completed else "#94a3b8"
+    end_col = "#059669" if pipeline_finished else "#94a3b8"
     parts.append(
         f'<div style="color:{end_col};font-size:16px;flex-shrink:0;'
-        f'padding:0 4px;opacity:{1.0 if "reporter" in completed else 0.4};">&#8212;&#9654;</div>'
+        f'padding:0 4px;opacity:{1.0 if pipeline_finished else 0.4};">&#8212;&#9654;</div>'
     )
     parts.append(
         '<div style="background:#e0e7ff;border:2px solid #4338ca;color:#3730a3;'
@@ -448,18 +465,28 @@ def _render_visualizations_tab(
 
             if exec_data.get("success"):
                 code = spec_dict.get("code", "")
-                if code:
+                figure_json = exec_data.get("figure_json")
+                if figure_json:
+                    try:
+                        st.plotly_chart(
+                            pio.from_json(figure_json),
+                            width="stretch",
+                            key=f"chart_{i}{key_suffix}",
+                        )
+                    except Exception as exc:
+                        st.error(f"Stored figure could not be restored: {exc}")
+                elif code:
                     exec_result = execute_chart(df, code)
                     if exec_result.success and exec_result.figure is not None:
                         st.plotly_chart(
                             exec_result.figure,
-                            use_container_width=True,
+                            width="stretch",
                             key=f"chart_{i}{key_suffix}",
                         )
                     else:
                         st.error(f"Re-execution failed: {exec_result.error}")
                 else:
-                    st.warning("No code available for this chart.")
+                    st.warning("No figure or code available for this chart.")
             else:
                 st.error(f"Execution error: {exec_data.get('error', 'Unknown')}")
 
@@ -545,11 +572,12 @@ def _render_memory_tab(result: dict[str, Any], key_suffix: str = "") -> None:
         st.divider()
         st.markdown("### 🔍 Retrieved Context (fed to Reporter)")
         st.info(
-            "The following context was automatically retrieved from memory and "
-            "injected into the Reporter agent to enrich the final report."
+            "📚 Context from a **previous analysis of this dataset** was automatically "
+            "retrieved from memory and injected into the Reporter agent to enrich the "
+            "current report. This is the RAG enrichment path in action."
         )
         with st.expander("View retrieved context", expanded=False):
-            st.text(rag_ctx)
+            st.markdown(rag_ctx)
     else:
         st.divider()
         st.markdown("### 🔍 Retrieved Context")
@@ -589,14 +617,25 @@ def _render_memory_tab(result: dict[str, Any], key_suffix: str = "") -> None:
             ["🔝 High Priority", "🏷️ By Category", "📑 Full Context"]
         )
 
+        # Keys used to persist results in session_state across Streamlit rerenders.
+        # Without this, results rendered inside `if st.button():` vanish the moment
+        # switching sub-tabs or any other interaction triggers a new rerender cycle.
+        _hp_key = f"_mem_hp_result{key_suffix}"
+        _cat_key = f"_mem_cat_result{key_suffix}"
+        _full_key = f"_mem_full_result{key_suffix}"
+
         with demo_tab1:
             if st.button("Retrieve high-priority insights", key=f"mem_hp{key_suffix}"):
                 with st.spinner("Querying memory…"):
-                    res = retrieve_high_priority_insights(dataset_id)
+                    st.session_state[_hp_key] = retrieve_high_priority_insights(dataset_id)
+            if _hp_key in st.session_state:
+                res = st.session_state[_hp_key]
                 if res.empty:
-                    st.warning("No high-priority insights found in memory yet.")
+                    st.warning(
+                        "No high-priority insights found in memory yet. Run a full analysis first."
+                    )
                 else:
-                    st.text(res.content)
+                    st.markdown(res.content)
 
         with demo_tab2:
             selected = st.selectbox(
@@ -607,20 +646,28 @@ def _render_memory_tab(result: dict[str, Any], key_suffix: str = "") -> None:
             )
             if st.button("Retrieve by category", key=f"mem_cat_btn{key_suffix}"):
                 with st.spinner("Querying memory…"):
-                    res = retrieve_insights_by_category(dataset_id, selected)
+                    st.session_state[_cat_key] = retrieve_insights_by_category(dataset_id, selected)
+            if _cat_key in st.session_state:
+                res = st.session_state[_cat_key]
                 if res.empty:
-                    st.warning(f"No {selected} insights found in memory yet.")
+                    st.warning(
+                        f"No {selected} insights found in memory yet. Run a full analysis first."
+                    )
                 else:
-                    st.text(res.content)
+                    st.markdown(res.content)
 
         with demo_tab3:
             if st.button("Retrieve full analysis context", key=f"mem_full{key_suffix}"):
                 with st.spinner("Querying memory…"):
-                    res = retrieve_analysis_context(dataset_id)
+                    st.session_state[_full_key] = retrieve_analysis_context(dataset_id)
+            if _full_key in st.session_state:
+                res = st.session_state[_full_key]
                 if res.empty:
-                    st.warning("No analysis context found in memory yet.")
+                    st.warning(
+                        "No analysis context found in memory yet. Run a full analysis first."
+                    )
                 else:
-                    st.text(res.content)
+                    st.markdown(res.content)
 
     # ── Section 5: Why Memory Matters ──────────────────────────────────────
     st.divider()
@@ -709,7 +756,7 @@ def _render_observability_tab(result: dict[str, Any]) -> None:
         st.link_button(
             "🚀 Open this run in LangFuse",
             summary.trace_url,
-            use_container_width=True,
+            width="stretch",
         )
         st.caption(
             "This link opens the **complete trace** in LangFuse — all agent spans, "
@@ -889,7 +936,7 @@ def _render_cancelled() -> None:
             "Upload a file and run again when you're ready.</p>",
             unsafe_allow_html=True,
         )
-    if st.button("🔄 Start Over", use_container_width=True):
+    if st.button("🔄 Start Over", width="stretch"):
         _reset_analysis()
         st.rerun()
 
@@ -956,10 +1003,14 @@ def _render_progressive_tabs(
     next_agent: str,
 ) -> None:
     """Render tabs during streaming — completed content + placeholders."""
+    if next_agent == "rag_storage":
+        meta = _AGENT_META["rag_storage"]
+        st.info(f"{meta['icon']} {meta['label']} is running — persisting this run to memory.")
+
     tab_labels: list[str] = []
     tab_agents: list[str] = []
 
-    for agent in _AGENTS_ORDER:
+    for agent in _CONTENT_AGENT_ORDER:
         meta = _AGENT_META[agent]
         if agent in completed:
             tab_labels.append(f"{meta['icon']} {meta['label']} ✓")
@@ -1007,12 +1058,14 @@ def _render_langfuse_sidebar_status(result: dict[str, Any] | None) -> None:
         st.caption("Set `LANGFUSE_ENABLED=true` + keys to enable tracing.")
         return
 
-    st.caption(f"🟢 LangFuse: enabled — [{settings.LANGFUSE_HOST}]({settings.LANGFUSE_HOST})")
+    st.caption(
+        f"🟢 LangFuse: enabled — [{settings.LANGFUSE_BASE_URL}]({settings.LANGFUSE_BASE_URL})"
+    )
 
     if result:
         trace_id = result.get("langfuse_trace_id", "")
         if trace_id:
-            trace_url = f"{settings.LANGFUSE_HOST.rstrip('/')}/trace/{trace_id}"
+            trace_url = f"{settings.LANGFUSE_BASE_URL.rstrip('/')}/trace/{trace_id}"
             st.caption(f"[🔍 View trace in LangFuse]({trace_url})")
             st.caption(f"Trace ID: `{trace_id}`")
         else:
@@ -1110,7 +1163,7 @@ def main() -> None:
     _render_kpi_row(profile)
 
     with st.expander("🗂️ Preview data", expanded=False):
-        st.dataframe(df.head(settings.PROFILER_SAMPLE_ROWS), use_container_width=True)
+        st.dataframe(df.head(settings.PROFILER_SAMPLE_ROWS), width="stretch")
 
     st.divider()
 
@@ -1119,6 +1172,7 @@ def main() -> None:
         "<h3 style='margin-bottom:4px;'>🔄 Pipeline Status</h3>",
         unsafe_allow_html=True,
     )
+    st.caption("START → Profiler → Analyst → Visualizer → Reporter → RAG Storage → END")
     diagram_area = st.empty()
 
     result: dict[str, Any] | None = st.session_state.get("analysis_result")
@@ -1140,7 +1194,7 @@ def main() -> None:
         if st.button(
             "🚀 Run Full Analysis",
             type="primary",
-            use_container_width=True,
+            width="stretch",
         ):
             _run_progressive_analysis(df, uploaded_file.name, diagram_area, dataset_id)
             return
@@ -1180,7 +1234,7 @@ def _run_progressive_analysis(
             "🛑 Stop Analysis",
             on_click=_cancel_analysis,
             type="secondary",
-            use_container_width=True,
+            width="stretch",
             key="stop_btn",
         )
 
@@ -1194,12 +1248,12 @@ def _run_progressive_analysis(
 
     # ---- Seed diagram using plain HTML (mounts no custom component → no reruns) ----
     with diagram_area.container():
-        _render_html_pipeline_status([], "profiler", [])
+        _render_html_pipeline_status([], _PIPELINE_STATUS_ORDER[0], [])
 
     # ---- Results area (updated per node) ----
     results_area = st.empty()
     with results_area.container():
-        _render_progressive_tabs(cumulative, df, completed, "profiler")
+        _render_progressive_tabs(cumulative, df, completed, _CONTENT_AGENT_ORDER[0])
 
     # ---- Stream nodes ----
     for node_name, node_output in stream_analysis(
@@ -1211,8 +1265,10 @@ def _run_progressive_analysis(
         completed.append(node_name)
         cumulative = _merge_state(cumulative, dict(node_output))
 
-        idx = _AGENTS_ORDER.index(node_name) if node_name in _AGENTS_ORDER else -1
-        next_agent = _AGENTS_ORDER[idx + 1] if idx + 1 < len(_AGENTS_ORDER) else ""
+        idx = _PIPELINE_STATUS_ORDER.index(node_name) if node_name in _PIPELINE_STATUS_ORDER else -1
+        next_agent = (
+            _PIPELINE_STATUS_ORDER[idx + 1] if idx + 1 < len(_PIPELINE_STATUS_ORDER) else ""
+        )
 
         # Live status via plain HTML — never triggers a Streamlit rerun
         live_trace: list[dict[str, Any]] = cumulative.get("graph_trace", [])

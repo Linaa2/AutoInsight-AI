@@ -60,7 +60,8 @@ Add these to your `.env` file (copy from `.env.example`):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LANGFUSE_ENABLED` | `false` | Master switch. Set to `true` to activate. |
-| `LANGFUSE_HOST` | `http://localhost:3001` | LangFuse server URL. Change for cloud: `https://cloud.langfuse.com` |
+| `LANGFUSE_BASE_URL` | `http://localhost:3001` | Canonical LangFuse server URL. Change for cloud: `https://cloud.langfuse.com` |
+| `LANGFUSE_HOST` | _(deprecated alias)_ | Backward-compatible alias for `LANGFUSE_BASE_URL` |
 | `LANGFUSE_PUBLIC_KEY` | _(empty)_ | Your project's public key |
 | `LANGFUSE_SECRET_KEY` | _(empty)_ | Your project's secret key |
 | `LANGFUSE_ENV` | `development` | Environment label (`development`, `staging`, `production`) |
@@ -75,24 +76,32 @@ All three conditions must hold for tracing to activate:
 
 ## 5. Self-hosted setup with Docker Compose
 
-Start a local LangFuse instance (Postgres + LangFuse server):
+Start a local LangFuse instance:
 
 ```bash
-# From the repo root:
-docker compose -f docker-compose.langfuse.yml up -d
+# Recommended: auto-generates credentials, starts web + worker + storage backends,
+# then seeds the missing project membership row required by the UI.
+make langfuse-up
 
 # Open the UI
 open http://localhost:3001
 ```
 
-After first launch:
-1. Create an account at `http://localhost:3001`
-2. Create a project and copy the **Public Key** and **Secret Key**
-3. Add them to your `.env`:
+This repo does not require any manual LangFuse setup through the UI:
+1. `scripts/setup_langfuse.py` generates `.env.langfuse`
+2. LangFuse seeds the org, project, API keys, and admin user on startup
+3. The same project keys are synced into `.env`
+
+After `make langfuse-up`, sign in with the credentials printed by the setup script.
+If you ran `make langfuse-reset`, open LangFuse in a fresh tab or clear site data for
+`localhost:3001` before signing in again because reset rotates the session secret and
+project identifiers.
+
+The app connects with:
 
 ```dotenv
 LANGFUSE_ENABLED=true
-LANGFUSE_HOST=http://localhost:3001
+LANGFUSE_BASE_URL=http://localhost:3001
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 ```
@@ -111,7 +120,7 @@ docker compose -f docker-compose.langfuse.yml down
 
 ```dotenv
 LANGFUSE_ENABLED=true
-LANGFUSE_HOST=http://localhost:3001
+LANGFUSE_BASE_URL=http://localhost:3001
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 ```
@@ -120,7 +129,7 @@ LANGFUSE_SECRET_KEY=sk-lf-...
 
 ```dotenv
 LANGFUSE_ENABLED=true
-LANGFUSE_HOST=https://cloud.langfuse.com
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 ```

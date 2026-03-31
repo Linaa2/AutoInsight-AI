@@ -38,7 +38,14 @@ def extract_chart_titles(visualizer_output: dict | None) -> list[str]:
     if not visualizer_output or not isinstance(visualizer_output, dict):
         return []
     charts = visualizer_output.get("charts", [])
-    return [c.get("title", "Untitled chart") for c in charts if isinstance(c, dict)]
+    titles: list[str] = []
+    for chart in charts:
+        if not isinstance(chart, dict):
+            continue
+        raw_spec = chart.get("spec")
+        spec: dict = raw_spec if isinstance(raw_spec, dict) else chart
+        titles.append(spec.get("title", "Untitled chart"))
+    return titles
 
 
 def build_charts_summary(visualizer_output: dict | None) -> str:

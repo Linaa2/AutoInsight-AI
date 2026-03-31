@@ -1,12 +1,12 @@
 # AutoInsight AI
 
-Système multi-agent d'analyse de données automatique — LangGraph + Gemini + Ollama.
+Système multi-agent d'analyse de données automatique — LangGraph + Ollama, avec Gemini en option.
 
 ## Stack
 | Composant | Outil |
 |---|---|
-| LLM primaire | Gemini 1.5 Flash |
-| LLM fallback | Ollama + Mistral 7B |
+| LLM primaire | Ollama (`qwen3:14b` / `qwen2.5-coder:14b` par défaut) |
+| LLM optionnel | Gemini (`gemini-1.5-flash`) |
 | Orchestration | LangGraph |
 | Monitoring | LangFuse |
 | Mémoire | ChromaDB |

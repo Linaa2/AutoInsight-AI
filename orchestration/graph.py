@@ -9,7 +9,7 @@ This module defines the **canonical** multi-agent workflow as a
 
 Graph flow::
 
-    START → profiler_node → analyst_node → visualizer_node → reporter_node → END
+    START → profiler_node → analyst_node → visualizer_node → reporter_node → rag_storage_node → END
 
 Usage::
 
@@ -50,6 +50,7 @@ from visualization.schemas import VisualizerRequest
 logger = logging.getLogger(__name__)
 
 _AGENTS_ORDER = ["profiler", "analyst", "visualizer", "reporter"]
+_DF_REGISTRY: dict[str, pd.DataFrame] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +94,51 @@ def _append_trace(state: PipelineState, entry: NodeTraceEntry) -> list[NodeTrace
     return existing
 
 
+def _append_memory_trace(
+    state: PipelineState,
+    entries: list[MemoryTraceEntry],
+) -> list[MemoryTraceEntry]:
+    """Return the existing memory trace list with *entries* appended."""
+    existing: list[MemoryTraceEntry] = list(state.get("memory_trace") or [])
+    existing.extend(entries)
+    return existing
+
+
+def _dataset_key(state: PipelineState) -> str:
+    """Return the pipeline-state key used to access the dataset."""
+    return "df_ref" if state.get("df_ref") else "df_dict"
+
+
+def _register_dataframe(df: pd.DataFrame) -> str:
+    """Store *df* in the in-process registry and return its reference key."""
+    import uuid
+
+    ref = f"df-{uuid.uuid4().hex}"
+    _DF_REGISTRY[ref] = df
+    return ref
+
+
+def _unregister_dataframe(ref: str | None) -> None:
+    """Remove a registered DataFrame reference when the run completes."""
+    if ref:
+        _DF_REGISTRY.pop(ref, None)
+
+
+def _resolve_dataframe(state: PipelineState) -> pd.DataFrame:
+    """Resolve the DataFrame from the fast in-process registry or the legacy fallback."""
+    df_ref = state.get("df_ref")
+    if df_ref:
+        df = _DF_REGISTRY.get(df_ref)
+        if df is not None:
+            return df
+
+    df_dict = state.get("df_dict")
+    if df_dict is not None:
+        return pd.DataFrame(df_dict)
+
+    raise KeyError("PipelineState is missing both 'df_ref' and 'df_dict'.")
+
+
 # ---------------------------------------------------------------------------
 # Node functions
 # ---------------------------------------------------------------------------
@@ -101,7 +147,7 @@ def _append_trace(state: PipelineState, entry: NodeTraceEntry) -> list[NodeTrace
 def profiler_node(state: PipelineState) -> PipelineState:
     """Run deterministic profiling + LLM interpretation.
 
-    Reads:  ``df_dict``
+    Reads:  ``df_ref`` or ``df_dict``
     Writes: ``profile_data``, ``profile_markdown``
     """
     t0 = time.time()
@@ -110,7 +156,8 @@ def profiler_node(state: PipelineState) -> PipelineState:
     node_meta = {"dataset_id": state.get("dataset_id", ""), "file_name": state.get("file_name", "")}
     with lf_monitor.node_span("profiler", metadata=node_meta):
         try:
-            df = pd.DataFrame(state["df_dict"])
+            dataset_key = _dataset_key(state)
+            df = _resolve_dataframe(state)
             profiler = DataProfiler()
             profile = profiler.profile(df)
 
@@ -131,7 +178,7 @@ def profiler_node(state: PipelineState) -> PipelineState:
                 "profiler",
                 status="success",
                 started=t0,
-                keys_read=["df_dict"],
+                keys_read=[dataset_key],
                 keys_written=["profile_data", "profile_markdown"],
                 summary=f"Profiled {profile.shape[0]} rows x {profile.shape[1]} cols",
                 telemetry=telem,
@@ -150,7 +197,7 @@ def profiler_node(state: PipelineState) -> PipelineState:
                 "profiler",
                 status="failed",
                 started=t0,
-                keys_read=["df_dict"],
+                keys_read=[_dataset_key(state)],
                 keys_written=[],
                 error=msg,
                 telemetry=telem,
@@ -161,7 +208,7 @@ def profiler_node(state: PipelineState) -> PipelineState:
 def analyst_node(state: PipelineState) -> PipelineState:
     """Generate structured insights from the profile.
 
-    Reads:  ``df_dict``, ``profile_data``, ``profile_markdown``
+    Reads:  ``df_ref`` or ``df_dict``, ``profile_data``, ``profile_markdown``
     Writes: ``insights``, ``insights_markdown``
     """
     t0 = time.time()
@@ -182,7 +229,8 @@ def analyst_node(state: PipelineState) -> PipelineState:
     res_before = collect_resource_snapshot()
     with lf_monitor.node_span("analyst", metadata=node_meta):
         try:
-            df = pd.DataFrame(state["df_dict"])
+            dataset_key = _dataset_key(state)
+            df = _resolve_dataframe(state)
             sample_text = df.head(5).to_string()
             profile_data = state.get("profile_data")
 
@@ -211,7 +259,7 @@ def analyst_node(state: PipelineState) -> PipelineState:
                 "analyst",
                 status="success",
                 started=t0,
-                keys_read=["df_dict", "profile_data", "profile_markdown"],
+                keys_read=[dataset_key, "profile_data", "profile_markdown"],
                 keys_written=["insights", "insights_markdown"],
                 summary=f"Generated {len(insights)} insights",
                 telemetry=telem,
@@ -230,7 +278,7 @@ def analyst_node(state: PipelineState) -> PipelineState:
                 "analyst",
                 status="failed",
                 started=t0,
-                keys_read=["df_dict", "profile_data", "profile_markdown"],
+                keys_read=[_dataset_key(state), "profile_data", "profile_markdown"],
                 keys_written=[],
                 error=msg,
                 telemetry=telem,
@@ -241,7 +289,7 @@ def analyst_node(state: PipelineState) -> PipelineState:
 def visualizer_node(state: PipelineState) -> PipelineState:
     """Propose and execute charts based on the profile and insights.
 
-    Reads:  ``df_dict``, ``profile_markdown``, ``insights_markdown``
+    Reads:  ``df_ref`` or ``df_dict``, ``profile_markdown``, ``insights_markdown``
     Writes: ``visualization_result``
     """
     t0 = time.time()
@@ -263,7 +311,8 @@ def visualizer_node(state: PipelineState) -> PipelineState:
     res_before = collect_resource_snapshot()
     with lf_monitor.node_span("visualizer", metadata=node_meta):
         try:
-            df = pd.DataFrame(state["df_dict"])
+            dataset_key = _dataset_key(state)
+            df = _resolve_dataframe(state)
             columns_info = ", ".join(f"{col} ({dtype})" for col, dtype in df.dtypes.items())
             request = VisualizerRequest(
                 profile_markdown=profile_md,
@@ -284,6 +333,11 @@ def visualizer_node(state: PipelineState) -> PipelineState:
                         "execution": {
                             "success": rc.execution.success,
                             "error": rc.execution.error,
+                            "figure_json": (
+                                rc.execution.figure.to_json()
+                                if rc.execution.success and rc.execution.figure is not None
+                                else None
+                            ),
                         },
                     }
                     for rc in result.charts
@@ -303,7 +357,7 @@ def visualizer_node(state: PipelineState) -> PipelineState:
                 "visualizer",
                 status="success",
                 started=t0,
-                keys_read=["df_dict", "profile_markdown", "insights_markdown"],
+                keys_read=[dataset_key, "profile_markdown", "insights_markdown"],
                 keys_written=["visualization_result"],
                 summary=f"{n_ok}/{len(result.charts)} charts rendered successfully",
                 telemetry=telem,
@@ -321,7 +375,7 @@ def visualizer_node(state: PipelineState) -> PipelineState:
                 "visualizer",
                 status="failed",
                 started=t0,
-                keys_read=["df_dict", "profile_markdown", "insights_markdown"],
+                keys_read=[_dataset_key(state), "profile_markdown", "insights_markdown"],
                 keys_written=[],
                 error=msg,
                 telemetry=telem,
@@ -357,6 +411,51 @@ def reporter_node(state: PipelineState) -> PipelineState:
         try:
             insights = state.get("insights")
             viz_result = state.get("visualization_result")
+            dataset_id = state.get("dataset_id", "default")
+            rag_context = state.get("rag_analysis_context") or ""
+            memory_entries: list[MemoryTraceEntry] = []
+
+            if not rag_context and dataset_id:
+                try:
+                    from agents.rag import RAGAgent
+
+                    rag = RAGAgent(dataset_id=dataset_id)
+                    rag_context = rag.get_analysis_context() or ""
+                    memory_entries.append(
+                        MemoryTraceEntry(
+                            event="retrieve_context",
+                            status="success" if rag_context else "empty",
+                            dataset_id=dataset_id,
+                            collection=None,
+                            chunks=0,
+                            message=(
+                                f"Retrieved prior context ({len(rag_context)} chars)"
+                                if rag_context
+                                else "No prior context found"
+                            ),
+                        )
+                    )
+                except Exception as exc:
+                    logger.debug("RAG context retrieval failed: %s", exc)
+                    memory_entries.append(
+                        MemoryTraceEntry(
+                            event="retrieve_context",
+                            status="failed",
+                            dataset_id=dataset_id,
+                            collection=None,
+                            chunks=0,
+                            message=str(exc),
+                        )
+                    )
+
+                lf_monitor.log_event(
+                    "rag-context-retrieval",
+                    input={"dataset_id": dataset_id},
+                    output={
+                        "retrieved": bool(rag_context),
+                        "context_chars": len(rag_context),
+                    },
+                )
 
             agent = ReporterAgent()
             llm_start = time.time()
@@ -365,12 +464,23 @@ def reporter_node(state: PipelineState) -> PipelineState:
                 analyst_output=insights_md or "",
                 insights=insights,
                 visualizer_output=viz_result,
-                rag_context=state.get("rag_analysis_context") or "",
+                rag_context=rag_context,
                 callbacks=callbacks,
             )
             llm_end = time.time()
 
             report = result.get("reporter_output", "")
+            memory_trace = _append_memory_trace(state, memory_entries) if memory_entries else None
+            keys_written = ["report_markdown"]
+            response: PipelineState = {
+                "report_markdown": report,
+            }
+            if rag_context != (state.get("rag_analysis_context") or ""):
+                response["rag_analysis_context"] = rag_context
+                keys_written.append("rag_analysis_context")
+            if memory_trace is not None:
+                response["memory_trace"] = memory_trace
+                keys_written.append("memory_trace")
 
             res_after = collect_resource_snapshot()
             telem = build_telemetry(
@@ -391,14 +501,12 @@ def reporter_node(state: PipelineState) -> PipelineState:
                     "visualization_result",
                     "rag_analysis_context",
                 ],
-                keys_written=["report_markdown"],
+                keys_written=keys_written,
                 summary=f"Report generated ({len(report)} chars)",
                 telemetry=telem,
             )
-            return {
-                "report_markdown": report,
-                "graph_trace": _append_trace(state, entry),
-            }
+            response["graph_trace"] = _append_trace(state, entry)
+            return response
         except Exception as exc:
             msg = f"Reporter failed: {exc}"
             logger.exception(msg)
@@ -459,7 +567,7 @@ def rag_storage_node(state: PipelineState) -> PipelineState:
         return {
             "rag_stored": False,
             "rag_summary": "Nothing to store — pipeline produced no outputs.",
-            "memory_trace": [],
+            "memory_trace": list(state.get("memory_trace") or []),
             "graph_trace": _append_trace(state, entry),
         }
 
@@ -472,16 +580,25 @@ def rag_storage_node(state: PipelineState) -> PipelineState:
 
         rag = RAGAgent(dataset_id=dataset_id)
 
+        # Erase the previous run's chunks for this dataset before writing fresh
+        # ones.  This prevents unbounded accumulation: without this call, every
+        # analysis appends new vectors to ChromaDB and each subsequent run
+        # retrieves an ever-growing mix of stale and current data.
+        # The reporter_node already consumed the previous context (retrieval
+        # happens before storage in the graph), so enrichment is unaffected.
+        rag.store.clear_dataset(dataset_id)
+
         if profile_md:
             try:
-                rag.save_analysis(profile_text=profile_md)
+                count = rag.store.store_profile(profile_md, dataset_id=dataset_id)
+                total_chunks += count
                 memory_trace.append(
                     MemoryTraceEntry(
                         event="store_profile",
                         status="success",
                         dataset_id=dataset_id,
                         collection="profiles",
-                        chunks=0,  # exact count not critical here
+                        chunks=count,
                         message="Profile markdown stored",
                     )
                 )
@@ -587,7 +704,7 @@ def rag_storage_node(state: PipelineState) -> PipelineState:
         return {
             "rag_stored": rag_stored,
             "rag_summary": rag_summary,
-            "memory_trace": memory_trace,
+            "memory_trace": _append_memory_trace(state, memory_trace),
             "graph_trace": _append_trace(state, entry),
         }
 
@@ -608,7 +725,7 @@ def rag_storage_node(state: PipelineState) -> PipelineState:
         return {
             "rag_stored": False,
             "rag_summary": msg,
-            "memory_trace": memory_trace,
+            "memory_trace": _append_memory_trace(state, memory_trace),
             "graph_trace": _append_trace(state, entry),
         }
 
@@ -680,10 +797,10 @@ def _make_initial_state(
 ) -> PipelineState:
     """Build the initial :class:`PipelineState` for a graph invocation.
 
-    Computes ``dataset_id`` from the file name if not provided.
-    Attempts a best-effort pre-load of prior RAG context so the reporter
-    can optionally enrich its output with context from previous runs.
-    Also starts a LangFuse trace for the run and logs the RAG retrieval event.
+    Computes ``dataset_id`` from the file name if not provided and registers
+    the DataFrame in the in-process registry so nodes can access it by
+    lightweight reference instead of rebuilding it from JSON on every step.
+    Also starts a LangFuse trace for the run.
     """
     import uuid
 
@@ -694,40 +811,20 @@ def _make_initial_state(
 
     run_id = str(uuid.uuid4())[:8]
 
-    # Best-effort: retrieve prior analysis context for reporter enrichment
-    rag_analysis_context = ""
-    try:
-        from agents.rag import RAGAgent
-
-        rag = RAGAgent(dataset_id=dataset_id)
-        rag_analysis_context = rag.get_analysis_context() or ""
-        if rag_analysis_context:
-            logger.info(f"Pre-loaded RAG context for dataset '{dataset_id}'")
-    except Exception as exc:
-        logger.debug(f"RAG pre-load skipped: {exc}")
-
     # Best-effort: start a LangFuse trace for this analysis run
     langfuse_trace_id = lf_monitor.begin_run(
         dataset_id=dataset_id,
         file_name=file_name,
         run_id=run_id,
     )
-    if langfuse_trace_id:
-        lf_monitor.log_event(
-            "rag-context-retrieval",
-            input={"dataset_id": dataset_id},
-            output={
-                "retrieved": bool(rag_analysis_context),
-                "context_chars": len(rag_analysis_context),
-            },
-        )
 
     return PipelineState(
-        df_dict=df.to_dict(orient="records"),
+        df_ref=_register_dataframe(df),
         file_name=file_name,
         dataset_id=dataset_id,
-        rag_analysis_context=rag_analysis_context,
+        rag_analysis_context="",
         langfuse_trace_id=langfuse_trace_id,
+        memory_trace=[],
         graph_trace=[],
     )
 
@@ -753,17 +850,20 @@ def run_analysis(
     """
     graph = build_graph()
     initial_state = _make_initial_state(df, file_name, dataset_id)
+    df_ref = initial_state.get("df_ref")
     try:
         result: PipelineState = graph.invoke(initial_state)
         lf_monitor.end_run(
             status="success",
             output={"nodes_run": len(result.get("graph_trace") or [])},
         )
+        result.pop("df_ref", None)
         return result
     except Exception:
         lf_monitor.end_run(status="error")
         raise
     finally:
+        _unregister_dataframe(df_ref)
         lf_monitor.flush()
 
 
@@ -785,12 +885,28 @@ def stream_analysis(
     """
     graph = build_graph()
     initial_state = _make_initial_state(df, file_name, dataset_id)
+    df_ref = initial_state.get("df_ref")
+    # Build a plain dict of stable fields so node_output merges stay type-clean.
+    # We access via .get() with a type: ignore to avoid the TypedDict literal-key
+    # restriction — the keys are all valid PipelineState fields.
+    static_state: dict[str, Any] = {}
+    for _skey in ("file_name", "dataset_id", "langfuse_trace_id"):
+        _sval = initial_state.get(_skey)  # type: ignore[misc]
+        if _sval is not None:
+            static_state[_skey] = _sval
     try:
         for chunk in graph.stream(initial_state, stream_mode="updates"):
-            yield from chunk.items()
+            for node_name, node_output in chunk.items():
+                # stream_mode="updates" only yields node deltas; inject the stable
+                # run metadata so the progressive UI sees the same identity fields
+                # as the non-streaming ``run_analysis`` path.
+                node_output = {**static_state, **node_output}
+                node_output.pop("df_ref", None)
+                yield node_name, cast("PipelineState", node_output)
         lf_monitor.end_run(status="success")
     except Exception:
         lf_monitor.end_run(status="error")
         raise
     finally:
+        _unregister_dataframe(df_ref)
         lf_monitor.flush()

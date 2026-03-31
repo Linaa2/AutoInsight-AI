@@ -47,6 +47,7 @@ def test_is_langfuse_enabled_false_by_default() -> None:
 
     with patch("utils.langfuse_client.settings") as mock_s:
         mock_s.LANGFUSE_ENABLED = False
+        mock_s.LANGFUSE_BASE_URL = "http://localhost:3001"
         mock_s.LANGFUSE_PUBLIC_KEY = ""
         mock_s.LANGFUSE_SECRET_KEY = ""
         assert is_langfuse_enabled() is False
@@ -57,21 +58,28 @@ def test_is_langfuse_enabled_respects_settings() -> None:
     from utils.langfuse_client import is_langfuse_enabled
 
     # Patch settings directly to avoid env-reload complexity
-    with patch("utils.langfuse_client.settings") as mock_settings:
+    with (
+        patch("utils.langfuse_client.settings") as mock_settings,
+        patch("utils.langfuse_client._load_local_bootstrap_config", return_value=None),
+    ):
         mock_settings.LANGFUSE_ENABLED = False
+        mock_settings.LANGFUSE_BASE_URL = "http://localhost:3001"
         assert is_langfuse_enabled() is False
 
         mock_settings.LANGFUSE_ENABLED = True
+        mock_settings.LANGFUSE_BASE_URL = "http://localhost:3001"
         mock_settings.LANGFUSE_PUBLIC_KEY = ""
         mock_settings.LANGFUSE_SECRET_KEY = "sk"
         assert is_langfuse_enabled() is False  # missing public key
 
         mock_settings.LANGFUSE_ENABLED = True
+        mock_settings.LANGFUSE_BASE_URL = "http://localhost:3001"
         mock_settings.LANGFUSE_PUBLIC_KEY = "pk"
         mock_settings.LANGFUSE_SECRET_KEY = ""
         assert is_langfuse_enabled() is False  # missing secret key
 
         mock_settings.LANGFUSE_ENABLED = True
+        mock_settings.LANGFUSE_BASE_URL = "http://localhost:3001"
         mock_settings.LANGFUSE_PUBLIC_KEY = "pk"
         mock_settings.LANGFUSE_SECRET_KEY = "sk"
         assert is_langfuse_enabled() is True
@@ -92,6 +100,38 @@ def test_settings_langfuse_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     # Keys default to empty strings (not None, not hardcoded values)
     assert fresh.LANGFUSE_PUBLIC_KEY == ""
     assert fresh.LANGFUSE_SECRET_KEY == ""
+
+
+def test_settings_langfuse_host_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LANGFUSE_HOST remains available as a compatibility alias."""
+    monkeypatch.setenv("LANGFUSE_BASE_URL", "http://localhost:3001")
+
+    from config.settings import Settings
+
+    fresh = Settings()
+    assert fresh.LANGFUSE_HOST == "http://localhost:3001"
+    assert fresh.LANGFUSE_HOST == fresh.LANGFUSE_BASE_URL
+
+
+def test_is_langfuse_enabled_true_with_local_bootstrap_credentials() -> None:
+    """Repo-managed local LangFuse remains enabled via .env.langfuse bootstrap keys."""
+    from utils.langfuse_client import _LangFuseConfig, is_langfuse_enabled
+
+    bootstrap = _LangFuseConfig(
+        source=".env.langfuse",
+        base_url="http://localhost:3001",
+        public_key="pk-lf-bootstrap",
+        secret_key="sk-lf-bootstrap",
+    )
+    with (
+        patch("utils.langfuse_client.settings") as mock_settings,
+        patch("utils.langfuse_client._load_local_bootstrap_config", return_value=bootstrap),
+    ):
+        mock_settings.LANGFUSE_ENABLED = True
+        mock_settings.LANGFUSE_BASE_URL = "http://localhost:3001"
+        mock_settings.LANGFUSE_PUBLIC_KEY = ""
+        mock_settings.LANGFUSE_SECRET_KEY = ""
+        assert is_langfuse_enabled() is True
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -149,7 +189,12 @@ def test_monitor_flush_safe_when_no_client() -> None:
 
 
 def test_monitor_begin_run_graceful_on_network_error() -> None:
-    """begin_run() returns '' (not raises) if the LangFuse server is down."""
+    """begin_run() still returns a trace ID when the LangFuse server is unreachable.
+
+    Trace ID generation is a local @staticmethod — no server call occurs.
+    The client will be None (spans won't be exported), but the trace ID itself
+    is available so the Observability tab can display it.
+    """
     monitor = _fresh_monitor()
     with (
         patch("utils.langfuse_client.is_langfuse_enabled", return_value=True),
@@ -158,14 +203,19 @@ def test_monitor_begin_run_graceful_on_network_error() -> None:
         mock_s.LANGFUSE_ENABLED = True
         mock_s.LANGFUSE_PUBLIC_KEY = "pk"
         mock_s.LANGFUSE_SECRET_KEY = "sk"
-        mock_s.LANGFUSE_HOST = "http://unreachable-host:3001"
+        mock_s.LANGFUSE_BASE_URL = "http://unreachable-host:3001"
         mock_s.LANGFUSE_ENV = "test"
         mock_s.LANGFUSE_RELEASE = ""
 
-        # Simulating Langfuse client raising on instantiation
-        with patch("langfuse.Langfuse", side_effect=ConnectionError("refused")):
+        # Constructor raises (server unreachable) but create_trace_id is local.
+        with patch("langfuse.Langfuse") as mock_lf_class:
+            mock_lf_class.side_effect = ConnectionError("refused")
+            mock_lf_class.create_trace_id = MagicMock(return_value="local-trace-abc")
             trace_id = monitor.begin_run(dataset_id="test.csv")
-    assert trace_id == ""
+
+    # Trace ID is available even though the client failed to initialize.
+    assert trace_id == "local-trace-abc"
+    assert monitor._client is None
 
 
 def test_monitor_all_methods_safe_after_failed_init() -> None:
@@ -342,16 +392,18 @@ def test_node_span_cleans_up_on_exception() -> None:
 
 
 def test_monitor_begin_run_returns_trace_id_when_enabled() -> None:
-    """begin_run() returns the trace ID when LangFuse client is working."""
+    """begin_run() returns the trace ID generated by Langfuse.create_trace_id."""
     monitor = _fresh_monitor()
-
-    mock_client = MagicMock()
-    mock_client.create_trace_id.return_value = "trace-abc-123"
 
     with (
         patch("utils.langfuse_client.is_langfuse_enabled", return_value=True),
-        patch("langfuse.Langfuse", return_value=mock_client),
+        patch("langfuse.Langfuse") as mock_lf_class,
     ):
+        # The class constructor returns a mock client instance.
+        mock_lf_class.return_value = MagicMock()
+        # create_trace_id is a @staticmethod — called on the class, not an instance.
+        mock_lf_class.create_trace_id = MagicMock(return_value="trace-abc-123")
+
         trace_id = monitor.begin_run(dataset_id="sales.csv", file_name="sales.csv")
 
     assert trace_id == "trace-abc-123"
@@ -360,8 +412,18 @@ def test_monitor_begin_run_returns_trace_id_when_enabled() -> None:
 
 def test_monitor_get_llm_callbacks_returns_handler_when_trace_set() -> None:
     """get_llm_callbacks() returns a list with a handler when a trace is active."""
+    from utils.langfuse_client import _LangFuseConfig
+
     monitor = _fresh_monitor()
     monitor._trace_id = "trace-abc-123"  # simulate active run
+    monitor._initialized = True
+    monitor._client = MagicMock()
+    monitor._client_config = _LangFuseConfig(
+        source=".env.langfuse",
+        base_url="http://localhost:3001",
+        public_key="pk-lf-bootstrap",
+        secret_key="sk-lf-bootstrap",
+    )
 
     mock_handler = MagicMock()
     # v4: import path is langfuse.langchain.CallbackHandler
@@ -370,6 +432,94 @@ def test_monitor_get_llm_callbacks_returns_handler_when_trace_set() -> None:
 
     assert len(callbacks) == 1
     assert callbacks[0] is mock_handler
+    assert callbacks == [mock_handler]
+
+
+def test_monitor_get_llm_callbacks_passes_resolved_public_key() -> None:
+    """CallbackHandler must use the validated public key, not ambient env vars."""
+    from utils.langfuse_client import _LangFuseConfig
+
+    monitor = _fresh_monitor()
+    monitor._trace_id = "trace-abc-123"
+    monitor._initialized = True
+    monitor._client = MagicMock()
+    monitor._client_config = _LangFuseConfig(
+        source=".env.langfuse",
+        base_url="http://localhost:3001",
+        public_key="pk-lf-bootstrap",
+        secret_key="sk-lf-bootstrap",
+    )
+
+    with patch("langfuse.langchain.CallbackHandler", return_value=MagicMock()) as mock_handler:
+        monitor.get_llm_callbacks()
+
+    mock_handler.assert_called_once_with(
+        public_key="pk-lf-bootstrap",
+        trace_context={"trace_id": "trace-abc-123"},
+    )
+
+
+def test_monitor_begin_run_returns_empty_on_auth_failure() -> None:
+    """Invalid credentials disable tracing for the run instead of exporting 401s later."""
+    monitor = _fresh_monitor()
+
+    with (
+        patch("utils.langfuse_client.is_langfuse_enabled", return_value=True),
+        patch("utils.langfuse_client._iter_langfuse_configs") as mock_configs,
+        patch("langfuse.Langfuse") as mock_lf_class,
+    ):
+        from utils.langfuse_client import _LangFuseConfig
+
+        mock_configs.return_value = [
+            _LangFuseConfig(
+                source="environment",
+                base_url="http://localhost:3001",
+                public_key="pk-lf-stale",
+                secret_key="sk-lf-stale",
+            )
+        ]
+        bad_client = MagicMock()
+        bad_client.auth_check.return_value = False
+        mock_lf_class.return_value = bad_client
+        mock_lf_class.create_trace_id = MagicMock(return_value="trace-should-not-exist")
+
+        trace_id = monitor.begin_run(dataset_id="sales.csv", file_name="sales.csv")
+
+    assert trace_id == ""
+    assert monitor._trace_id == ""
+
+
+def test_monitor_prefers_valid_local_bootstrap_credentials() -> None:
+    """Local bootstrap credentials are used when ambient credentials drift."""
+    monitor = _fresh_monitor()
+
+    with (
+        patch("utils.langfuse_client.is_langfuse_enabled", return_value=True),
+        patch("utils.langfuse_client._iter_langfuse_configs") as mock_configs,
+        patch("langfuse.Langfuse") as mock_lf_class,
+    ):
+        from utils.langfuse_client import _LangFuseConfig
+
+        bootstrap = _LangFuseConfig(
+            source=".env.langfuse",
+            base_url="http://localhost:3001",
+            public_key="pk-lf-bootstrap",
+            secret_key="sk-lf-bootstrap",
+        )
+        env_cfg = _LangFuseConfig(
+            source="environment",
+            base_url="http://localhost:3001",
+            public_key="pk-lf-stale",
+            secret_key="sk-lf-stale",
+        )
+        mock_configs.return_value = [bootstrap, env_cfg]
+        good_client = MagicMock()
+        good_client.auth_check.return_value = True
+        mock_lf_class.return_value = good_client
+        client = monitor._ensure_client()
+
+    assert client is good_client
+    assert monitor._client_config == bootstrap
 
 
 def test_monitor_log_event_calls_trace_event() -> None:

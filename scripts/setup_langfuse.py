@@ -8,7 +8,8 @@ Run via `make langfuse-up` (recommended) or directly::
 What it does
 ------------
 1. Generates cryptographically strong secrets:
-   - NEXTAUTH_SECRET and SALT  (for the LangFuse server)
+   - NEXTAUTH_SECRET, SALT, and ENCRYPTION_KEY  (for the LangFuse server)
+   - REDIS_AUTH (shared by the local LangFuse web/worker stack and Redis)
    - Organisation and project UUIDs
    - API key pair in LangFuse format (``pk-lf-<uuid>`` / ``sk-lf-<uuid>``)
    - A random admin password
@@ -16,7 +17,7 @@ What it does
    seed the LangFuse server via ``LANGFUSE_INIT_*`` environment variables,
    so no manual account creation through the UI is ever needed.
 3. Updates the project ``.env`` so the Python app connects immediately:
-   ``LANGFUSE_ENABLED=true``, ``LANGFUSE_HOST``,
+   ``LANGFUSE_ENABLED=true``, ``LANGFUSE_BASE_URL``,
    ``LANGFUSE_PUBLIC_KEY``, ``LANGFUSE_SECRET_KEY``.
 
 Idempotent
@@ -100,6 +101,8 @@ def _generate_env_langfuse() -> dict[str, str]:
     return {
         "NEXTAUTH_SECRET": _hex(32),
         "SALT": _hex(32),
+        "ENCRYPTION_KEY": _hex(32),
+        "REDIS_AUTH": _password(),
         "LANGFUSE_INIT_ORG_ID": str(uuid.uuid4()),
         "LANGFUSE_INIT_ORG_NAME": "AutoInsight AI",
         "LANGFUSE_INIT_PROJECT_ID": str(uuid.uuid4()),
@@ -122,6 +125,8 @@ def _write_env_langfuse(secrets_: dict[str, str]) -> None:
         "# ── LangFuse server security ──────────────────────────────────────",
         f"NEXTAUTH_SECRET={secrets_['NEXTAUTH_SECRET']}",
         f"SALT={secrets_['SALT']}",
+        f"ENCRYPTION_KEY={secrets_['ENCRYPTION_KEY']}",
+        f"REDIS_AUTH={secrets_['REDIS_AUTH']}",
         "",
         "# ── Auto-seeded organisation ──────────────────────────────────────",
         f"LANGFUSE_INIT_ORG_ID={secrets_['LANGFUSE_INIT_ORG_ID']}",
@@ -154,6 +159,22 @@ def _read_env_langfuse() -> dict[str, str]:
             key, _, value = line.partition("=")
             result[key.strip()] = value.strip()
     return result
+
+
+def _ensure_required_server_secrets(creds: dict[str, str]) -> bool:
+    """Backfill secrets added in newer LangFuse stack revisions."""
+    updated = False
+    defaults = {
+        "NEXTAUTH_SECRET": _hex(32),
+        "SALT": _hex(32),
+        "ENCRYPTION_KEY": _hex(32),
+        "REDIS_AUTH": _password(),
+    }
+    for key, default in defaults.items():
+        if not creds.get(key):
+            creds[key] = default
+            updated = True
+    return updated
 
 
 # ── Project .env updater ───────────────────────────────────────────────────
@@ -224,6 +245,9 @@ def main() -> None:
         _ok(f"{ENV_LANGFUSE.name} already exists — loading existing credentials")
         _info("(use --force / make langfuse-reset to rotate credentials)")
         creds = _read_env_langfuse()
+        if _ensure_required_server_secrets(creds):
+            _write_env_langfuse(creds)
+            _ok(f"{ENV_LANGFUSE.name} updated with any newly required server secrets")
     else:
         if args.force and ENV_LANGFUSE.exists():
             _warn("--force: regenerating ALL credentials (old keys will be invalid)")
@@ -239,7 +263,7 @@ def main() -> None:
 
     project_updates = {
         "LANGFUSE_ENABLED": "true",
-        "LANGFUSE_HOST": "http://localhost:3001",
+        "LANGFUSE_BASE_URL": "http://localhost:3001",
         "LANGFUSE_PUBLIC_KEY": creds["LANGFUSE_INIT_PROJECT_PUBLIC_KEY"],
         "LANGFUSE_SECRET_KEY": creds["LANGFUSE_INIT_PROJECT_SECRET_KEY"],
     }

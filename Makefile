@@ -39,7 +39,7 @@ run: ## Run the Streamlit app
 
 langfuse-up: ## Start LangFuse — auto-generates credentials on first run
 	uv run python scripts/setup_langfuse.py
-	docker compose -f docker-compose.langfuse.yml up -d
+	docker compose -f docker-compose.langfuse.yml up -d --wait --remove-orphans
 	uv run python scripts/seed_langfuse_membership.py
 	@echo ""
 	@echo "  LangFuse UI → http://localhost:3001"
@@ -47,15 +47,21 @@ langfuse-up: ## Start LangFuse — auto-generates credentials on first run
 	@echo ""
 
 langfuse-down: ## Stop LangFuse (data preserved)
-	docker compose -f docker-compose.langfuse.yml down
+	docker compose -f docker-compose.langfuse.yml down --remove-orphans
 
 langfuse-reset: ## Destroy LangFuse data and rotate all credentials
 	@echo "⚠  This will destroy all LangFuse traces and rotate credentials."
 	@read -p "   Continue? [y/N] " _c && [ "$$_c" = y ] || exit 1
-	docker compose -f docker-compose.langfuse.yml down -v
+	docker compose -f docker-compose.langfuse.yml down -v --remove-orphans
 	rm -f .env.langfuse
 	uv run python scripts/setup_langfuse.py
-	docker compose -f docker-compose.langfuse.yml up -d
+	docker compose -f docker-compose.langfuse.yml up -d --wait --remove-orphans
 	uv run python scripts/seed_langfuse_membership.py
+	@echo ""
+	@echo "  LangFuse UI → http://localhost:3001"
+	@echo "  Note       → langfuse-reset invalidates old LangFuse sessions and project URLs."
+	@echo "               If the UI shows a missing project or unauthorized page,"
+	@echo "               reopen http://localhost:3001 in a fresh tab or clear site data."
+	@echo ""
 
 .PHONY: help install pre-commit lint format fix test check run langfuse-up langfuse-down langfuse-reset

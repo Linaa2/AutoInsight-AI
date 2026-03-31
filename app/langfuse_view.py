@@ -156,7 +156,7 @@ def build_langfuse_run_summary(result: dict[str, Any]) -> LangfuseRunSummary:
     module-level config/client imports.
     """
     enabled = is_langfuse_enabled()
-    host = settings.LANGFUSE_HOST if enabled else None
+    host = settings.LANGFUSE_BASE_URL if enabled else None
     trace_id = result.get("langfuse_trace_id") or None
     trace_url = build_trace_url(host, trace_id)
 

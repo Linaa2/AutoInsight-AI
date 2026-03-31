@@ -50,6 +50,18 @@ def test_extract_chart_titles_empty():
     print("✅ extract_chart_titles (empty): OK")
 
 
+def test_extract_chart_titles_nested_spec():
+    """Serialized visualizer output stores titles under chart['spec']."""
+    viz = {
+        "charts": [
+            {"spec": {"title": "Sales by Region", "chart_type": "bar"}},
+            {"spec": {"title": "Price Distribution", "chart_type": "histogram"}},
+        ]
+    }
+    titles = extract_chart_titles(viz)
+    assert titles == ["Sales by Region", "Price Distribution"]
+
+
 def test_build_charts_summary():
     """Test charts summary formatting."""
     viz = {

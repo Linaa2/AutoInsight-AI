@@ -251,9 +251,9 @@ class TestExtractHighlights:
     def test_high_cardinality_flag(self, high_card_df):
         p = DataProfiler().profile(high_card_df)
         flags = _extract_highlights(p, "fast")
-        assert any(
-            "HIGH_CARDINALITY" in f for f in flags
-        ), f"Expected HIGH_CARDINALITY, got: {flags}"
+        assert any("HIGH_CARDINALITY" in f for f in flags), (
+            f"Expected HIGH_CARDINALITY, got: {flags}"
+        )
 
     def test_wide_date_range_flag(self, datetime_df):
         p = DataProfiler().profile(datetime_df)
