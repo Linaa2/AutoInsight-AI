@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, ClassVar
 
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 if TYPE_CHECKING:
@@ -249,19 +249,28 @@ class ContextStore:
         Returns:
             List of relevant insight text chunks.
         """
-        where_filter: dict[str, str] = {}
+        conditions: dict[str, str] = {}
         if dataset_id:
-            where_filter["dataset_id"] = dataset_id
+            conditions["dataset_id"] = dataset_id
         if priority:
-            where_filter["priority"] = priority
+            conditions["priority"] = priority
         if category:
-            where_filter["category"] = category
+            conditions["category"] = category
+
+        # ChromaDB rejects a flat dict with >1 key ("Expected where to have
+        # exactly one operator").  Use $and when multiple conditions are needed.
+        if not conditions:
+            chroma_filter: dict | None = None
+        elif len(conditions) == 1:
+            chroma_filter = conditions
+        else:
+            chroma_filter = {"$and": [{key: val} for key, val in conditions.items()]}
 
         return self._search_collection(
             query,
             self.INSIGHTS,
             k,
-            where_filter if where_filter else None,
+            chroma_filter,
         )
 
     def search_as_text(
@@ -302,6 +311,38 @@ class ContextStore:
                 logger.info(f"Cleared collection '{col_name}'")
             except Exception:
                 pass
+
+    def clear_dataset(self, dataset_id: str) -> None:
+        """Delete all stored chunks for *dataset_id* across every collection.
+
+        Called by :func:`~orchestration.graph.rag_storage_node` **before** writing
+        fresh data for a run so that re-analysing the same file replaces the
+        previous run's chunks rather than accumulating duplicates indefinitely.
+
+        Clearing happens *after* :func:`~orchestration.graph.reporter_node` has
+        already retrieved the previous run's context, so the enrichment path is
+        unaffected.
+        """
+        import chromadb
+
+        client = chromadb.PersistentClient(path=self.persist_dir)
+        for col_name in self.ALL_COLLECTIONS:
+            try:
+                col = client.get_collection(col_name)
+                # get() returns {"ids": [...], ...} — fetch IDs matching this dataset
+                existing = col.get(where={"dataset_id": dataset_id})
+                ids_to_delete = existing.get("ids") or []
+                if ids_to_delete:
+                    col.delete(ids=ids_to_delete)
+                    logger.info(
+                        "clear_dataset: removed %d chunks from '%s' for dataset '%s'",
+                        len(ids_to_delete),
+                        col_name,
+                        dataset_id,
+                    )
+            except Exception as exc:
+                # Collection may not exist yet on the first ever run — safe to skip.
+                logger.debug("clear_dataset: could not clear '%s': %s", col_name, exc)
 
     def list_collections(self) -> list[str]:
         """List all existing collections."""

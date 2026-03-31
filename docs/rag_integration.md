@@ -23,26 +23,25 @@ ContextStore.make_dataset_id(filename)   ← deterministic, whitespace-stripped
     │
     ▼
 _make_initial_state(df, file_name, dataset_id)
-    │   ├─ pre-loads rag_analysis_context from previous run (best-effort)
     │   └─ initialises PipelineState with dataset_id + graph_trace=[]
     │
     ▼
 LangGraph pipeline:
   profiler ──► analyst ──► visualizer ──► reporter ──► rag_storage ──► END
                                               │               │
-                                    reads rag_analysis_context  stores outputs
-                                    (from previous run)         (current run)
+                                  retrieves prior context       stores outputs
+                                  on demand (best-effort)       (current run)
 ```
 
 ### Key Design Decisions
 
 | Decision | Rationale |
 |---|---|
-| `rag_storage_node` runs **after** reporter | Storage never blocks the main analysis; best-effort |
+| `rag_storage_node` runs **after** reporter | Storage is isolated from the analysis agents and remains best-effort |
 | RAG is **always optional** — every node degrades gracefully | No Ollama / ChromaDB = identical behaviour |
 | `dataset_id` is the **filename** (stripped) | Simple, human-readable, stable across sessions |
 | `rag_storage_node` is **not** in `_AGENTS_ORDER` | It's infrastructure, not a user-visible analysis step |
-| Pre-load happens in `_make_initial_state` | Single point of entry for both `run_analysis` and `stream_analysis` |
+| Retrieval happens inside `reporter_node` | Avoids adding startup latency before the first streamed result |
 
 ---
 
@@ -133,9 +132,9 @@ memory_trace: list[MemoryTraceEntry]
 
 **`_make_initial_state(df, file_name, dataset_id=None) → PipelineState`**
 
-Computes `dataset_id` and attempts a best-effort pre-load of prior RAG context.
-The pre-load is wrapped in a broad `try/except`; if Ollama/ChromaDB is unavailable
-the function still completes and returns a valid state with `rag_analysis_context=""`.
+Computes `dataset_id`, registers the DataFrame in the in-process registry, and
+starts the LangFuse trace. It returns a valid initial state with
+`rag_analysis_context=""`; prior context retrieval is deferred to `reporter_node`.
 
 **`rag_storage_node(state) → PipelineState`**
 
@@ -149,7 +148,7 @@ Best-effort storage node that:
 5. The outer `try/except` catches any crash during instantiation — the node
    **never propagates exceptions** to the graph.
 
-### `agents/reporter.py` — RAG Context Injection
+### `agents/reporter.py` + `orchestration/graph.py` — RAG Context Injection
 
 `ReporterAgent.run()` accepts an optional `rag_context: str = ""` parameter.
 When non-empty, the context is appended to the human prompt as a supplementary section:
@@ -162,7 +161,8 @@ Use it only if it adds value to the current report.
 <retrieved context>
 ```
 
-The reporter is called from `reporter_node` in `orchestration/graph.py`:
+`reporter_node` retrieves the prior context just-in-time, then passes it into
+`ReporterAgent.run(...)`:
 
 ```python
 result = agent.run(

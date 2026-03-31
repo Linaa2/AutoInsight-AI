@@ -8,9 +8,10 @@ Design choices
 --------------
 * **TypedDict** with ``total=False`` — LangGraph's ``StateGraph`` natively
   supports TypedDicts for key-based state updates.
-* ``df_dict`` (``list[dict]``) is used instead of a raw ``DataFrame`` because
-  LangGraph serialises state when checkpointing; a dict-list is JSON-safe.
-  Nodes reconstruct the ``DataFrame`` locally.
+* ``df_ref`` stores an in-process DataFrame handle for the normal app path,
+  avoiding repeated JSON serialisation / reconstruction across nodes.
+* ``df_dict`` remains available as a backward-compatible JSON-safe fallback
+  for callers that still invoke the graph with list-of-dicts payloads.
 * A ``graph_trace`` list accumulates one entry per executed node, giving the
   UI layer full observability over the pipeline run.
 """
@@ -54,7 +55,8 @@ class PipelineState(TypedDict, total=False):
     """
 
     # ---- inputs (set before graph invocation) ----
-    df_dict: list[dict[str, Any]]
+    df_ref: str  # in-process handle to the uploaded DataFrame (preferred fast path)
+    df_dict: list[dict[str, Any]]  # backward-compatible JSON-safe fallback
     file_name: str
     dataset_id: str  # stable identifier derived from file_name via ContextStore.make_dataset_id
 

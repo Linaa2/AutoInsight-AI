@@ -104,13 +104,22 @@ class Settings:
 
     # -- LangFuse external observability (optional) --
     LANGFUSE_ENABLED: bool = field(default_factory=lambda: _env_bool("LANGFUSE_ENABLED", False))
-    LANGFUSE_HOST: str = field(
-        default_factory=lambda: _env("LANGFUSE_HOST", "http://localhost:3001")
+    # LANGFUSE_BASE_URL is the canonical SDK env var (v4+).
+    # Falls back to the deprecated LANGFUSE_HOST for backward compatibility.
+    LANGFUSE_BASE_URL: str = field(
+        default_factory=lambda: (
+            _env("LANGFUSE_BASE_URL", "") or _env("LANGFUSE_HOST", "http://localhost:3001")
+        )
     )
     LANGFUSE_PUBLIC_KEY: str = field(default_factory=lambda: _env("LANGFUSE_PUBLIC_KEY", ""))
     LANGFUSE_SECRET_KEY: str = field(default_factory=lambda: _env("LANGFUSE_SECRET_KEY", ""))
     LANGFUSE_ENV: str = field(default_factory=lambda: _env("LANGFUSE_ENV", "development"))
     LANGFUSE_RELEASE: str = field(default_factory=lambda: _env("LANGFUSE_RELEASE", ""))
+
+    @property
+    def LANGFUSE_HOST(self) -> str:
+        """Backward-compatible alias for older docs / UI code."""
+        return self.LANGFUSE_BASE_URL
 
 
 #: Module-level singleton — import ``settings`` everywhere.

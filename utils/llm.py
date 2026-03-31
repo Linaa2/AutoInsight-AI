@@ -10,7 +10,8 @@ All model names and provider settings are read from :mod:`config.settings`
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+import inspect
+from typing import TYPE_CHECKING, Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
@@ -71,14 +72,49 @@ class LLMClient:
         if settings.LLM_PROVIDER == "gemini":
             from langchain_google_genai import ChatGoogleGenerativeAI
 
-            return ChatGoogleGenerativeAI(
-                model=settings.GEMINI_MODEL,
-                convert_system_message_to_human=True,
+            kwargs = LLMClient._with_timeout(
+                ChatGoogleGenerativeAI,
+                {
+                    "model": settings.GEMINI_MODEL,
+                    "convert_system_message_to_human": True,
+                },
             )
-        return ChatOllama(
-            model=model,
-            base_url=settings.OLLAMA_BASE_URL,
+            return ChatGoogleGenerativeAI(
+                **kwargs,
+            )
+        kwargs = LLMClient._with_timeout(
+            ChatOllama,
+            {
+                "model": model,
+                "base_url": settings.OLLAMA_BASE_URL,
+            },
         )
+        return ChatOllama(**kwargs)
+
+    @staticmethod
+    def _with_timeout(model_cls: type, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Attach timeout configuration when the provider supports it.
+
+        LangChain integrations are not fully consistent about the constructor
+        parameter name they expose, so we inspect the signature and only pass
+        arguments the target class accepts.
+        """
+        resolved = dict(kwargs)
+        try:
+            params = inspect.signature(model_cls).parameters
+        except (TypeError, ValueError):
+            return resolved
+
+        if "timeout" in params:
+            resolved.setdefault("timeout", settings.LLM_TIMEOUT)
+        elif "request_timeout" in params:
+            resolved.setdefault("request_timeout", settings.LLM_TIMEOUT)
+        elif "client_kwargs" in params:
+            client_kwargs = dict(resolved.get("client_kwargs") or {})
+            client_kwargs.setdefault("timeout", settings.LLM_TIMEOUT)
+            resolved["client_kwargs"] = client_kwargs
+
+        return resolved
 
 
 # ---------------------------------------------------------------------------

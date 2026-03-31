@@ -1,5 +1,16 @@
 """Shared pytest fixtures for AutoInsight-AI tests."""
 
+import os
+
+# Prevent the LangFuse SDK from starting its OTEL BatchSpanProcessor background
+# thread during unit tests.  The SDK checks LANGFUSE_TRACING_ENABLED at
+# Langfuse() construction time.  Setting it here — at module load, before any
+# project code is imported — ensures that even if a test triggers a real
+# Langfuse() instantiation (e.g. through the module-level `monitor` singleton),
+# the OTEL exporter is never configured and no network calls are made.
+# Tests that need to verify enabled-client behaviour already mock langfuse.Langfuse.
+os.environ.setdefault("LANGFUSE_TRACING_ENABLED", "false")
+
 import numpy as np
 import pandas as pd
 import pytest

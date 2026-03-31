@@ -74,14 +74,15 @@ _STATUS_STYLE: dict[str, dict[str, str]] = {
 # React Flow pipeline canvas
 # ---------------------------------------------------------------------------
 
-# Horizontal positions: START + 4 agents + END, spaced 210 px apart
+# Horizontal positions: START + 5 pipeline steps + END, spaced 210 px apart
 _NODE_X: dict[str, float] = {
     "start": 0,
     "profiler": 210,
     "analyst": 420,
     "visualizer": 630,
     "reporter": 840,
-    "end": 1050,
+    "rag_storage": 1050,
+    "end": 1260,
 }
 _NODE_Y = 80  # vertical centre for all nodes
 

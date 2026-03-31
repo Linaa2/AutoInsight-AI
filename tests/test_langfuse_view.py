@@ -101,7 +101,7 @@ class TestBuildLangfuseRunSummary:
             patch("app.langfuse_view.is_langfuse_enabled", return_value=True),
             patch("app.langfuse_view.settings") as mock_s,
         ):
-            mock_s.LANGFUSE_HOST = "http://localhost:3001"
+            mock_s.LANGFUSE_BASE_URL = "http://localhost:3001"
             summary = build_langfuse_run_summary(result)
 
         assert summary.enabled is True
@@ -114,7 +114,7 @@ class TestBuildLangfuseRunSummary:
             patch("app.langfuse_view.is_langfuse_enabled", return_value=True),
             patch("app.langfuse_view.settings") as mock_s,
         ):
-            mock_s.LANGFUSE_HOST = "http://localhost:3001"
+            mock_s.LANGFUSE_BASE_URL = "http://localhost:3001"
             summary = build_langfuse_run_summary({})
 
         assert summary.trace_id is None
@@ -145,7 +145,7 @@ class TestBuildLangfuseRunSummary:
             patch("app.langfuse_view.is_langfuse_enabled", return_value=True),
             patch("app.langfuse_view.settings") as mock_s,
         ):
-            mock_s.LANGFUSE_HOST = "http://localhost:3001"
+            mock_s.LANGFUSE_BASE_URL = "http://localhost:3001"
             summary = build_langfuse_run_summary(result)
 
         assert summary.status == "success"
@@ -162,7 +162,7 @@ class TestBuildLangfuseRunSummary:
             patch("app.langfuse_view.is_langfuse_enabled", return_value=True),
             patch("app.langfuse_view.settings") as mock_s,
         ):
-            mock_s.LANGFUSE_HOST = "http://localhost:3001"
+            mock_s.LANGFUSE_BASE_URL = "http://localhost:3001"
             summary = build_langfuse_run_summary(result)
 
         assert summary.status == "partial"
@@ -176,7 +176,7 @@ class TestBuildLangfuseRunSummary:
             patch("app.langfuse_view.is_langfuse_enabled", return_value=True),
             patch("app.langfuse_view.settings") as mock_s,
         ):
-            mock_s.LANGFUSE_HOST = "http://localhost:3001"
+            mock_s.LANGFUSE_BASE_URL = "http://localhost:3001"
             summary = build_langfuse_run_summary(result)
 
         assert summary.status == "failed"

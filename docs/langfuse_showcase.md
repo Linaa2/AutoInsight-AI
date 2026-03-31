@@ -59,7 +59,7 @@ agents plug into the same framework.
 2. The monitor creates a trace ID via `langfuse.create_trace_id()` and stores it internally.
 3. The trace ID is written into `PipelineState["langfuse_trace_id"]`.
 4. After the full run, `app/langfuse_view.py` reads `result["langfuse_trace_id"]` and
-   constructs the trace URL as `{LANGFUSE_HOST}/trace/{trace_id}`.
+   constructs the trace URL as `{LANGFUSE_BASE_URL}/trace/{trace_id}`.
 
 ### How the UI gets observability data
 
@@ -68,7 +68,7 @@ It calls `build_langfuse_run_summary(result)` which:
 - reads `langfuse_trace_id` from the pipeline result
 - reads `graph_trace` to derive per-node summaries
 - reads `memory_trace`, `rag_stored`, `rag_analysis_context` for RAG info
-- checks `is_langfuse_enabled()` and `settings.LANGFUSE_HOST`
+- checks `is_langfuse_enabled()` and `settings.LANGFUSE_BASE_URL`
 - returns a frozen `LangfuseRunSummary` dataclass
 
 This keeps the UI contract stable: future changes to LangFuse internals
@@ -247,8 +247,8 @@ corresponding `MemoryTraceEntry` to `memory_trace`.
 | `LANGFUSE_ENABLED` | `.env` | Master switch — `true` enables all tracing |
 | `LANGFUSE_PUBLIC_KEY` | `.env` (via `setup_langfuse.py`) | Auth public key |
 | `LANGFUSE_SECRET_KEY` | `.env` (via `setup_langfuse.py`) | Auth secret key |
-| `LANGFUSE_HOST` | `.env` | LangFuse server URL (default: `http://localhost:3001`) |
+| `LANGFUSE_BASE_URL` | `.env` | LangFuse server URL (default: `http://localhost:3001`) |
 
 Run `make langfuse-up` to start a local LangFuse instance and auto-populate
-these variables. The trace link in the Observability tab uses `LANGFUSE_HOST`
+these variables. The trace link in the Observability tab uses `LANGFUSE_BASE_URL`
 to construct the URL.

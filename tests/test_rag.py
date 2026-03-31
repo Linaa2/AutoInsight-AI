@@ -248,27 +248,21 @@ def test_make_initial_state_respects_explicit_dataset_id() -> None:
     assert state["file_name"] == "file.csv"
 
 
-def test_make_initial_state_df_dict_present() -> None:
-    """df_dict is populated with the DataFrame rows."""
+def test_make_initial_state_df_ref_present() -> None:
+    """The fast path stores a DataFrame reference instead of serializing rows."""
     from orchestration.graph import _make_initial_state
 
     df = pd.DataFrame({"col": [10, 20, 30]})
     state = _make_initial_state(df, "test.csv")
 
-    assert "df_dict" in state
-    assert len(state["df_dict"]) == 3
+    assert "df_ref" in state
+    assert state["df_ref"].startswith("df-")
+    assert "df_dict" not in state
 
 
-def test_make_initial_state_rag_context_empty_without_history(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """rag_analysis_context is '' when there is no prior history."""
+def test_make_initial_state_rag_context_empty_without_history() -> None:
+    """Initial state starts with no RAG context; retrieval happens in reporter_node."""
     from orchestration.graph import _make_initial_state
-
-    # Mock RAGAgent so get_analysis_context returns ""
-    mock_rag = MagicMock()
-    mock_rag.get_analysis_context.return_value = ""
-    monkeypatch.setattr("agents.rag.RAGAgent", MagicMock(return_value=mock_rag))
 
     df = pd.DataFrame({"a": [1]})
     state = _make_initial_state(df, "no_history.csv")
@@ -276,20 +270,33 @@ def test_make_initial_state_rag_context_empty_without_history(
     assert state.get("rag_analysis_context", "") == ""
 
 
-def test_make_initial_state_rag_context_preset_when_history_exists(
+def test_reporter_node_retrieves_rag_context_when_history_exists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """rag_analysis_context is populated when prior context is available."""
-    from orchestration.graph import _make_initial_state
+    """reporter_node retrieves prior context on demand and returns it in state."""
+    from orchestration.graph import reporter_node
 
     mock_rag = MagicMock()
     mock_rag.get_analysis_context.return_value = "Prior analysis: revenue grew by 10%."
     monkeypatch.setattr("agents.rag.RAGAgent", MagicMock(return_value=mock_rag))
 
-    df = pd.DataFrame({"a": [1]})
-    state = _make_initial_state(df, "repeat.csv")
+    mock_reporter = MagicMock()
+    mock_reporter.run.return_value = {"reporter_output": "# Report"}
+    monkeypatch.setattr("orchestration.graph.ReporterAgent", MagicMock(return_value=mock_reporter))
 
-    assert "Prior analysis" in state.get("rag_analysis_context", "")
+    result = reporter_node(
+        {
+            "dataset_id": "repeat.csv",
+            "profile_markdown": "Profile data",
+            "insights_markdown": "Insights here",
+            "graph_trace": [],
+            "memory_trace": [],
+        }
+    )
+
+    assert "Prior analysis" in result.get("rag_analysis_context", "")
+    assert result["report_markdown"] == "# Report"
+    assert any(evt.get("event") == "retrieve_context" for evt in result.get("memory_trace", []))
 
 
 # ═══════════════════════════════════════════════════════════════════════════

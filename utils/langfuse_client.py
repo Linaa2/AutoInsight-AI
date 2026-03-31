@@ -50,14 +50,30 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
+
+from dotenv import dotenv_values
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-from config.settings import settings
+from config.settings import REPO_ROOT, settings
 
 logger = logging.getLogger(__name__)
+_LOCAL_LANGFUSE_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+@dataclass(frozen=True)
+class _LangFuseConfig:
+    """Resolved LangFuse credentials for one candidate configuration."""
+
+    source: str
+    base_url: str
+    public_key: str
+    secret_key: str
 
 
 # ---------------------------------------------------------------------------
@@ -68,16 +84,94 @@ logger = logging.getLogger(__name__)
 def is_langfuse_enabled() -> bool:
     """Return ``True`` when LangFuse is fully configured and enabled.
 
-    All three conditions must hold:
+    The master switch must be enabled and at least one credential source
+    must be available:
     * ``LANGFUSE_ENABLED=true`` in env / ``.env``
-    * ``LANGFUSE_PUBLIC_KEY`` is non-empty
-    * ``LANGFUSE_SECRET_KEY`` is non-empty
+    * either explicit ``LANGFUSE_PUBLIC_KEY`` / ``LANGFUSE_SECRET_KEY`` are
+      set, or repo-managed local bootstrap credentials exist in
+      ``.env.langfuse``
     """
-    return (
-        settings.LANGFUSE_ENABLED
-        and bool(settings.LANGFUSE_PUBLIC_KEY)
-        and bool(settings.LANGFUSE_SECRET_KEY)
+    return bool(_iter_langfuse_configs())
+
+
+def _key_prefix(value: str) -> str:
+    """Return a short redacted key prefix for logging."""
+    return f"{value[:12]}..." if value else "<missing>"
+
+
+def _is_local_langfuse_base_url(base_url: str) -> bool:
+    """Return True when *base_url* targets a loopback LangFuse instance."""
+    try:
+        hostname = urlparse(base_url).hostname or ""
+    except Exception:
+        return False
+    return hostname in _LOCAL_LANGFUSE_HOSTS
+
+
+def _load_local_bootstrap_config(base_url: str) -> _LangFuseConfig | None:
+    """Load repo-managed local LangFuse credentials from ``.env.langfuse``."""
+    if not _is_local_langfuse_base_url(base_url):
+        return None
+
+    env_path = Path(REPO_ROOT) / ".env.langfuse"
+    if not env_path.exists():
+        return None
+
+    values = dotenv_values(env_path)
+    public_key = str(values.get("LANGFUSE_INIT_PROJECT_PUBLIC_KEY") or "").strip()
+    secret_key = str(values.get("LANGFUSE_INIT_PROJECT_SECRET_KEY") or "").strip()
+    if not public_key or not secret_key:
+        return None
+
+    return _LangFuseConfig(
+        source=".env.langfuse",
+        base_url=base_url,
+        public_key=public_key,
+        secret_key=secret_key,
     )
+
+
+def _iter_langfuse_configs() -> list[_LangFuseConfig]:
+    """Return LangFuse credential candidates in the order they should be tried."""
+    if not settings.LANGFUSE_ENABLED:
+        return []
+
+    base_url = settings.LANGFUSE_BASE_URL.strip()
+    if not base_url:
+        return []
+
+    candidates: list[_LangFuseConfig] = []
+    local_bootstrap = _load_local_bootstrap_config(base_url)
+    if local_bootstrap is not None:
+        candidates.append(local_bootstrap)
+
+    public_key = settings.LANGFUSE_PUBLIC_KEY.strip()
+    secret_key = settings.LANGFUSE_SECRET_KEY.strip()
+    if public_key and secret_key:
+        env_config = _LangFuseConfig(
+            source="environment",
+            base_url=base_url,
+            public_key=public_key,
+            secret_key=secret_key,
+        )
+        if env_config not in candidates:
+            candidates.append(env_config)
+
+    return candidates
+
+
+def _has_conflicting_langfuse_configs(candidates: list[_LangFuseConfig]) -> bool:
+    """Return True when candidate sources disagree on the effective credentials."""
+    unique_credentials = {
+        (config.base_url, config.public_key, config.secret_key) for config in candidates
+    }
+    return len(unique_credentials) > 1
+
+
+def _is_invalid_credentials_error(exc: Exception) -> bool:
+    """Return True when *exc* looks like an auth failure."""
+    msg = str(exc).lower()
+    return any(token in msg for token in ("401", "unauthorized", "invalid credentials"))
 
 
 # ---------------------------------------------------------------------------
@@ -122,16 +216,38 @@ class LangFuseMonitor:
 
     def __init__(self) -> None:
         self._client: Any = None  # Langfuse direct client
+        self._client_config: _LangFuseConfig | None = None
         self._trace_id: str = ""  # active run trace ID (empty = no active run)
         self._initialized: bool = False  # guard for lazy init
+        self._client_error_kind: str = ""  # "", "auth", or "unavailable"
 
     # ── Initialisation ─────────────────────────────────────────────────────
+
+    def _auth_check(self, client: Any, config: _LangFuseConfig) -> bool:
+        """Return True when *client* is authenticated for *config*."""
+        auth_check = getattr(client, "auth_check", None)
+        if auth_check is None:
+            return True
+
+        try:
+            return bool(auth_check())
+        except Exception as exc:
+            if _is_invalid_credentials_error(exc):
+                logger.warning(
+                    "LangFuse auth rejected %s credentials (%s) for %s.",
+                    config.source,
+                    _key_prefix(config.public_key),
+                    config.base_url,
+                )
+                return False
+            raise
 
     def _ensure_client(self) -> Any | None:
         """Lazily create the Langfuse client on first call."""
         if self._initialized:
             return self._client
         self._initialized = True
+        self._client_error_kind = ""
 
         if not is_langfuse_enabled():
             return None
@@ -139,17 +255,74 @@ class LangFuseMonitor:
         try:
             from langfuse import Langfuse
 
-            # host= is deprecated in v4 but still accepted; base_url= is preferred
-            self._client = Langfuse(
-                public_key=settings.LANGFUSE_PUBLIC_KEY,
-                secret_key=settings.LANGFUSE_SECRET_KEY,
-                host=settings.LANGFUSE_HOST,
-            )
-            logger.info("LangFuse initialized — host: %s", settings.LANGFUSE_HOST)
+            # LangFuse's propagation module (langfuse/_client/propagation.py) logs
+            # WARNING when LangGraph injects non-string run metadata into LangChain
+            # callbacks (langgraph_step: int, langgraph_triggers: list, etc.).
+            # LangFuse silently drops those values — the warnings are harmless noise.
+            # We must suppress AFTER the import because langfuse/logger.py resets
+            # the level to WARNING when the package is first imported.
+            logging.getLogger("langfuse").setLevel(logging.ERROR)
+            logging.getLogger("opentelemetry.sdk.trace").setLevel(logging.ERROR)
         except Exception as exc:
             logger.warning("LangFuse initialization failed (running without it): %s", exc)
             self._client = None
+            self._client_config = None
+            self._client_error_kind = "unavailable"
+            return None
 
+        candidates = _iter_langfuse_configs()
+        if _has_conflicting_langfuse_configs(candidates):
+            logger.info(
+                "Detected conflicting LangFuse credential sources for %s; using repo-managed "
+                "credentials from .env.langfuse for the local self-hosted stack.",
+                settings.LANGFUSE_BASE_URL,
+            )
+
+        for config in candidates:
+            try:
+                # base_url= occupies the highest-priority slot in the SDK's resolution
+                # chain (client.py: base_url > LANGFUSE_BASE_URL env > host > LANGFUSE_HOST env).
+                # Passing it explicitly ensures our configured value is always used,
+                # regardless of any ambient LANGFUSE_BASE_URL in the OS environment.
+                candidate = Langfuse(
+                    public_key=config.public_key,
+                    secret_key=config.secret_key,
+                    base_url=config.base_url,
+                )
+                if not self._auth_check(candidate, config):
+                    self._client_error_kind = "auth"
+                    continue
+
+                self._client = candidate
+                self._client_config = config
+                logger.info(
+                    "LangFuse initialized — base_url: %s (source: %s, key: %s)",
+                    config.base_url,
+                    config.source,
+                    _key_prefix(config.public_key),
+                )
+                self._client_error_kind = ""
+                return self._client
+            except Exception as exc:
+                if _is_invalid_credentials_error(exc):
+                    self._client_error_kind = "auth"
+                    logger.warning(
+                        "LangFuse initialization rejected %s credentials (%s) for %s.",
+                        config.source,
+                        _key_prefix(config.public_key),
+                        config.base_url,
+                    )
+                    continue
+                logger.warning(
+                    "LangFuse initialization failed for %s (running without it): %s",
+                    config.source,
+                    exc,
+                )
+                self._client_error_kind = "unavailable"
+                continue
+
+        self._client = None
+        self._client_config = None
         return self._client
 
     # ── Run-level trace ────────────────────────────────────────────────────
@@ -174,17 +347,33 @@ class LangFuseMonitor:
         Returns:
             The LangFuse trace ID, or ``""`` if LangFuse is disabled.
         """
-        client = self._ensure_client()
-        if client is None:
+        if not is_langfuse_enabled():
+            return ""
+
+        # Initialize the client best-effort (also applies log suppression on
+        # first import).  Client being None is acceptable — trace ID generation
+        # is a local operation that does NOT require server connectivity.
+        self._ensure_client()
+        if self._client_error_kind == "auth":
+            logger.warning(
+                "LangFuse is enabled but the configured credentials were rejected by %s. "
+                "Tracing is disabled until the credential source is corrected.",
+                settings.LANGFUSE_BASE_URL,
+            )
+            self._trace_id = ""
             return ""
 
         try:
-            # v4 API: generate a deterministic trace ID from the run_id seed
-            self._trace_id = client.create_trace_id(seed=run_id or None)
-            logger.debug("LangFuse trace started: %s", self._trace_id)
+            # create_trace_id is a @staticmethod — no client instance needed.
+            # It generates a 32-char hex UUID locally; the server is never
+            # contacted here, so 401 / unreachable-server errors cannot block it.
+            from langfuse import Langfuse as _Langfuse
+
+            self._trace_id = _Langfuse.create_trace_id(seed=run_id or None)
+            logger.debug("LangFuse trace ID: %s", self._trace_id)
             return self._trace_id
         except Exception as exc:
-            logger.debug("LangFuse begin_run failed: %s", exc)
+            logger.warning("LangFuse trace ID generation failed: %s", exc)
             self._trace_id = ""
             return ""
 
@@ -215,13 +404,20 @@ class LangFuseMonitor:
         Returns:
             ``[CallbackHandler]`` or ``[]`` when LangFuse is disabled.
         """
-        if not self._trace_id:
+        client = self._ensure_client()
+        config = self._client_config
+        if client is None or config is None or not self._trace_id:
             return []
         try:
             # v4 API: link to existing trace via trace_context
             from langfuse.langchain import CallbackHandler
 
-            return [CallbackHandler(trace_context={"trace_id": self._trace_id})]
+            return [
+                CallbackHandler(
+                    public_key=config.public_key,
+                    trace_context={"trace_id": self._trace_id},
+                )
+            ]
         except Exception as exc:
             logger.debug("LangFuse get_llm_callbacks failed: %s", exc)
             return []
@@ -332,8 +528,10 @@ class LangFuseMonitor:
     def reset(self) -> None:
         """Reset client state (useful for testing)."""
         self._client = None
+        self._client_config = None
         self._trace_id = ""
         self._initialized = False
+        self._client_error_kind = ""
 
 
 # ---------------------------------------------------------------------------
