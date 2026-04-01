@@ -1,121 +1,188 @@
-# Configuration Architecture
+# Configuration
 
-AutoInsight-AI separates configuration into two layers:
+This document explains how configuration works in AutoInsight-AI.
 
-1. **Static project paths** — deterministic, repository-relative, defined in code.
-2. **Runtime settings** — env-driven, vary per developer / deployment.
+## Configuration Philosophy
 
----
+The project separates configuration into two categories:
 
-## What belongs where
+1. static repository paths
+2. runtime environment settings
 
-| Category | Where it lives | Examples |
-|---|---|---|
-| Prompts file path | `config/settings.py` (static) | `PROMPTS_PATH` |
-| Repo root / docs dir | `config/settings.py` (static) | `REPO_ROOT`, `DOCS_DIR` |
-| LLM model names | `.env` → `config/settings.py` (runtime) | `OLLAMA_TEXT_MODEL` |
-| Provider & timeout | `.env` → `config/settings.py` (runtime) | `LLM_PROVIDER`, `LLM_TIMEOUT` |
-| Profiler knobs | `.env` → `config/settings.py` (runtime) | `PROFILER_SAMPLE_ROWS` |
-| API keys | `.env` only (never in code) | `GOOGLE_API_KEY` |
+## Static Paths
 
-**Rule**: if it's a filesystem path internal to the repo, it's **static**.
-If different contributors may want different values, it's **runtime** (`.env`).
+Static project paths are defined in `config/settings.py` and should not come from `.env`.
 
----
+Examples:
 
-## `config/settings.py`
+- `REPO_ROOT`
+- `PROMPTS_PATH`
+- `DOCS_DIR`
+- `DATA_DIR`
 
-Single source of truth. Two parts:
+These are deterministic repository-relative paths.
 
-### Static paths (module-level constants)
+## Runtime Settings
 
-```python
-from config.settings import REPO_ROOT, PROMPTS_PATH, DOCS_DIR, DATA_DIR
+Runtime configuration is loaded from environment variables through the frozen `Settings` dataclass in `config/settings.py`.
+
+Main runtime areas:
+
+- LLM provider and models
+- timeouts
+- profiler knobs
+- data-loader behavior
+- app title
+- LangFuse connectivity
+- ChromaDB settings
+
+## `.env` Workflow
+
+Start from:
+
+```bash
+cp .env.example .env
 ```
 
-These are computed once from `Path(__file__)`. No environment variable involved.
+Then adjust only the runtime variables you need.
 
-### Runtime settings (frozen dataclass)
+## Most Important Variables
 
-```python
-from config.settings import settings
+### LLM
 
-settings.OLLAMA_LIGHT_MODEL  # "qwen3:4b"
-settings.OLLAMA_TEXT_MODEL   # "qwen3:14b"
-settings.LLM_TIMEOUT         # 300
-settings.PROFILER_SAMPLE_ROWS # 5
+| Variable | Description |
+|---|---|
+| `LLM_PROVIDER` | `ollama` or `gemini` |
+| `OLLAMA_BASE_URL` | Base URL for local Ollama |
+| `OLLAMA_LIGHT_MODEL` | Fast model for lightweight tasks |
+| `OLLAMA_TEXT_MODEL` | Main reasoning model |
+| `OLLAMA_CODE_MODEL` | Model used for chart code generation |
+| `GEMINI_MODEL` | Gemini model name when using the Gemini provider |
+| `LLM_TIMEOUT` | Timeout for a single LLM request |
+
+### Profiler
+
+| Variable | Description |
+|---|---|
+| `PROFILER_SAMPLE_ROWS` | Number of sample rows shown and profiled |
+| `PROFILER_TOP_VALUES` | Max number of top categorical values retained |
+| `PROFILER_DETAIL_MODE` | `fast` or `full` profiler prompt detail |
+
+### Data loading
+
+| Variable | Description |
+|---|---|
+| `DATA_LOADER_EXCEL_SHEET` | Excel sheet index or name |
+
+### App
+
+| Variable | Description |
+|---|---|
+| `APP_TITLE` | Streamlit page title |
+| `CRITIC_BATCH_SIZE` | Critic batch size |
+
+### Memory
+
+| Variable | Description |
+|---|---|
+| `OLLAMA_EMBED_MODEL` | Embedding model for ChromaDB retrieval |
+| `CHROMA_DIR` | Local persistence directory for ChromaDB |
+
+### LangFuse
+
+| Variable | Description |
+|---|---|
+| `LANGFUSE_ENABLED` | Enable external tracing |
+| `LANGFUSE_BASE_URL` | LangFuse host |
+| `LANGFUSE_PUBLIC_KEY` | Project public key |
+| `LANGFUSE_SECRET_KEY` | Project secret key |
+| `LANGFUSE_ENV` | Environment label |
+| `LANGFUSE_RELEASE` | Optional release tag |
+
+### Evaluation
+
+| Variable | Description |
+|---|---|
+| `EVAL_UNCERTAINTY_HIGH_THRESHOLD` | High-confidence threshold |
+| `EVAL_UNCERTAINTY_MEDIUM_THRESHOLD` | Medium-confidence threshold |
+| `EVAL_UNCERTAINTY_BATCH_SIZE` | Uncertainty scoring batch size |
+| `EVAL_JUDGE_MODEL` | Optional model override for LLM Judge |
+| `EVAL_JUDGE_TIMEOUT` | Dedicated judge timeout |
+
+## Model Routing
+
+Model routing is centralized in `utils/llm.py`.
+
+### Tier mapping
+
+| Tier | Default model |
+|---|---|
+| `light` | `qwen3:4b` |
+| `text` | `qwen3:14b` |
+| `code` | `qwen2.5-coder:14b` |
+
+### Task mapping
+
+| Task | Tier |
+|---|---|
+| `profiler` | `light` |
+| `analyst` | `text` |
+| `critic` | `text` |
+| `reporter` | `text` |
+| `uncertainty` | `light` |
+| `categorizer` | `light` |
+| `visualizer` | `code` |
+
+## Prompt Configuration
+
+All agent prompts live in one file:
+
+```text
+config/prompts.yaml
 ```
 
-`Settings` is a frozen `@dataclass` that reads from `os.getenv()` at import
-time. `.env` is loaded via `python-dotenv` at the top of the module.
+They are loaded exclusively through:
 
----
-
-## Prompt loading
-
-Prompts live in `config/prompts.yaml`. The path is `config.settings.PROMPTS_PATH`.
-
-All agents use a single shared loader:
-
-```python
-from utils.prompt_loader import load_prompt_section
-
-prompts = load_prompt_section("profiler")   # {"system": "...", "human": "..."}
-prompts = load_prompt_section("visualizer")
+```text
+utils/prompt_loader.load_prompt_section()
 ```
 
-Agents **never** compute their own path to prompts. If the section key is
-missing, a `KeyError` is raised immediately.
+This keeps prompt ownership centralized and predictable.
 
----
+## Recommended Local Development Configuration
 
-## LLM model routing
-
-`utils/llm.py` provides `LLMClient`:
-
-```python
-from utils.llm import LLMClient
-
-llm = LLMClient.get_light_llm()            # OLLAMA_LIGHT_MODEL → qwen3:4b
-llm = LLMClient.get_text_llm()             # OLLAMA_TEXT_MODEL  → qwen3:14b
-llm = LLMClient.get_code_llm()             # OLLAMA_CODE_MODEL  → qwen2.5-coder:14b
-llm = LLMClient.get_task_llm("profiler")   # task-aware routing → light tier
-```
-
-Model names come from `config.settings.settings`. The provider (`ollama` or
-`gemini`) selects which LangChain adapter is instantiated.
-
-Default task routing:
-
-- `light`: profiler, insight categorizer, uncertainty scoring
-- `text`: analyst, critic, reporter
-- `code`: visualizer
-
----
-
-## `.env.example`
-
-```
+```dotenv
 LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_LIGHT_MODEL=qwen3:4b
 OLLAMA_TEXT_MODEL=qwen3:14b
 OLLAMA_CODE_MODEL=qwen2.5-coder:14b
+OLLAMA_EMBED_MODEL=nomic-embed-text
 LLM_TIMEOUT=300
+LANGFUSE_ENABLED=false
 ```
 
-Copy to `.env` and adjust. The following do **NOT** belong in `.env`:
+## Make Targets
 
-- `PROMPTS_PATH` — it's a repo path, defined in `config/settings.py`.
-- Any hardcoded filesystem path.
+Common commands:
 
----
-
-## Anti-patterns removed in this refactor
-
-| Before | After |
+| Command | Purpose |
 |---|---|
-| `Path(__file__).parent.parent / "config" / ...` in agents | `config.settings.PROMPTS_PATH` (static constant) |
-| `os.getenv("PROMPTS_PATH", ...)` | Removed — not a runtime setting |
-| `sys.path.insert(0, ...)` in Streamlit app | Removed — `uv run` sets CWD correctly |
-| Raw `os.getenv()` scattered in tools | `config.settings.settings.*` centralized |
-| `monkeypatch.setenv()` in tests for tool config | Constructor parameters with settings-based defaults |
+| `make install` | Install dependencies and pre-commit hooks |
+| `make run` | Start Streamlit |
+| `make run PORT=8502` | Start Streamlit on a different port |
+| `make test` | Run fast unit tests |
+| `make test-all` | Run the full test suite |
+| `make check` | Run the main local quality checks |
+| `make langfuse-up` | Start the local LangFuse stack |
+| `make langfuse-down` | Stop the local LangFuse stack |
+| `make langfuse-reset` | Reset LangFuse data and credentials |
+
+## Configuration Rules
+
+Keep the following rules in mind:
+
+- repository paths do not belong in `.env`
+- API keys should never be hardcoded in source files
+- prompt paths should never be recomputed inside agents
+- model selection should go through `utils/llm.py`
