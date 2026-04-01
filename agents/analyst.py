@@ -248,7 +248,11 @@ class InsightCategorizer:
                 insight_json=json.dumps(insight, ensure_ascii=False, indent=2)
             )
 
-            raw = call_llm_with_messages(system=system_prompt, human=human_prompt)
+            raw = call_llm_with_messages(
+                system=system_prompt,
+                human=human_prompt,
+                task="categorizer",
+            )
             cat = raw.strip().lower().replace('"', "").replace("'", "")
 
             return cat if cat in self.VALID_CATEGORIES else self._categorize_by_keywords(insight)
@@ -420,7 +424,12 @@ class AnalystAgent:
         )
 
         # Use the team's call_llm_with_messages (text model by default)
-        raw = call_llm_with_messages(system=system_prompt, human=human_prompt, callbacks=callbacks)
+        raw = call_llm_with_messages(
+            system=system_prompt,
+            human=human_prompt,
+            callbacks=callbacks,
+            task="analyst",
+        )
 
         return self._parse_response(raw)
 

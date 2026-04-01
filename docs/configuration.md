@@ -40,8 +40,9 @@ These are computed once from `Path(__file__)`. No environment variable involved.
 ```python
 from config.settings import settings
 
+settings.OLLAMA_LIGHT_MODEL  # "qwen3:4b"
 settings.OLLAMA_TEXT_MODEL   # "qwen3:14b"
-settings.LLM_TIMEOUT         # 60
+settings.LLM_TIMEOUT         # 300
 settings.PROFILER_SAMPLE_ROWS # 5
 ```
 
@@ -75,12 +76,20 @@ missing, a `KeyError` is raised immediately.
 ```python
 from utils.llm import LLMClient
 
-llm = LLMClient.get_text_llm()   # OLLAMA_TEXT_MODEL → qwen3:14b
-llm = LLMClient.get_code_llm()   # OLLAMA_CODE_MODEL → qwen2.5-coder:14b
+llm = LLMClient.get_light_llm()            # OLLAMA_LIGHT_MODEL → qwen3:4b
+llm = LLMClient.get_text_llm()             # OLLAMA_TEXT_MODEL  → qwen3:14b
+llm = LLMClient.get_code_llm()             # OLLAMA_CODE_MODEL  → qwen2.5-coder:14b
+llm = LLMClient.get_task_llm("profiler")   # task-aware routing → light tier
 ```
 
 Model names come from `config.settings.settings`. The provider (`ollama` or
 `gemini`) selects which LangChain adapter is instantiated.
+
+Default task routing:
+
+- `light`: profiler, insight categorizer, uncertainty scoring
+- `text`: analyst, critic, reporter
+- `code`: visualizer
 
 ---
 
@@ -88,9 +97,10 @@ Model names come from `config.settings.settings`. The provider (`ollama` or
 
 ```
 LLM_PROVIDER=ollama
+OLLAMA_LIGHT_MODEL=qwen3:4b
 OLLAMA_TEXT_MODEL=qwen3:14b
 OLLAMA_CODE_MODEL=qwen2.5-coder:14b
-LLM_TIMEOUT=60
+LLM_TIMEOUT=300
 ```
 
 Copy to `.env` and adjust. The following do **NOT** belong in `.env`:

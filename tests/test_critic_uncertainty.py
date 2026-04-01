@@ -466,6 +466,30 @@ def test_estimate_all_returns_one_per_insight(
     assert len(result["confidence_scores"]) == len(sample_insights)
 
 
+def test_estimate_all_batches_llm_call_once_for_typical_insight_count(
+    sample_insights: list[dict[str, Any]],
+    large_clean_profile: dict[str, Any],
+    mock_llm_scores: dict[str, Any],
+) -> None:
+    estimator = UncertaintyEstimator()
+    batched = {
+        "results": [
+            {
+                "index": i,
+                "statistical_evidence": mock_llm_scores["statistical_evidence"],
+                "critic_assessment": mock_llm_scores["critic_assessment"],
+            }
+            for i in range(len(sample_insights))
+        ]
+    }
+    with patch("agents.uncertainty.call_llm_with_messages") as mock_llm:
+        mock_llm.return_value = json.dumps(batched)
+        result = estimator.estimate_all(sample_insights, [], large_clean_profile)
+
+    mock_llm.assert_called_once()
+    assert len(result["confidence_scores"]) == len(sample_insights)
+
+
 def test_estimate_all_empty_insights(large_clean_profile: dict[str, Any]) -> None:
     estimator = UncertaintyEstimator()
     result = estimator.estimate_all([], [], large_clean_profile)
@@ -510,6 +534,21 @@ def test_estimate_all_returns_uncertainty_output(
 
     assert isinstance(result["uncertainty_output"], str)
     assert len(result["uncertainty_output"]) > 0
+
+
+def test_estimate_all_batch_unparseable_response_falls_back_per_insight(
+    sample_insights: list[dict[str, Any]],
+    large_clean_profile: dict[str, Any],
+) -> None:
+    estimator = UncertaintyEstimator()
+    with patch("agents.uncertainty.call_llm_with_messages") as mock_llm:
+        mock_llm.return_value = "not valid json"
+        result = estimator.estimate_all(sample_insights, [], large_clean_profile)
+
+    assert len(result["confidence_scores"]) == len(sample_insights)
+    for score in result["confidence_scores"]:
+        assert score["drivers"]["statistical_evidence"]["score"] == 12
+        assert score["drivers"]["critic_assessment"]["score"] == 12
 
 
 # ---------------------------------------------------------------------------

@@ -50,7 +50,7 @@ Now the decision-maker knows what to act on and what to investigate further.
 │   ├── Data Quality Score       → 0–25 points    │
 │   └── Specificity Score        → 0–25 points    │
 │                                                  │
-│   LLM-BASED (1 call per insight)   50 pts max   │
+│   LLM-BASED (1 call per batch)     50 pts max   │
 │   ├── Statistical Evidence     → 0–25 points    │
 │   └── Critic Assessment        → 0–25 points    │
 │                                                  │
@@ -136,7 +136,7 @@ Reply ONLY with JSON:
 }
 ```
 
-**One LLM call per insight. That's it.**
+**One LLM call per batch in the common case. That's it.**
 
 ### Final Score
 
@@ -240,7 +240,7 @@ For each insight:
 | **Question**      | "Is this reasoning sound?"          | "How confident should we be?"      |
 | **Output**        | Text (strengths, weaknesses, etc.)  | Number (0–100%) + drivers          |
 | **Method**        | LLM only (reviews reasoning)        | Hybrid: rules + LLM               |
-| **Uses LLM?**     | Yes (1 call per insight)            | Yes (1 call per insight for 2 scores) |
+| **Uses LLM?**     | Yes (1 call per insight)            | Yes (typically 1 batched call for all insights) |
 | **Input**         | insight + profile_data              | insight + critique + profile_data  |
 | **Depends on**    | Analyst only                        | Analyst + Critic                   |
 | **In report**     | "However, this may be because..."   | "Confidence: 76% 🟡"              |

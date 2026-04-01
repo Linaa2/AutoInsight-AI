@@ -76,11 +76,16 @@ class Settings:
     OLLAMA_BASE_URL: str = field(
         default_factory=lambda: _env("OLLAMA_BASE_URL", "http://localhost:11434")
     )
+    OLLAMA_LIGHT_MODEL: str = field(default_factory=lambda: _env("OLLAMA_LIGHT_MODEL", "qwen3:4b"))
     OLLAMA_TEXT_MODEL: str = field(default_factory=lambda: _env("OLLAMA_TEXT_MODEL", "qwen3:14b"))
     OLLAMA_CODE_MODEL: str = field(
         default_factory=lambda: _env("OLLAMA_CODE_MODEL", "qwen2.5-coder:14b")
     )
-    LLM_TIMEOUT: int = field(default_factory=lambda: _env_int("LLM_TIMEOUT", 60))
+    # Timeout in seconds for a single LLM call.  Must be long enough to cover
+    # cold-start model loading (30-60 s for 14B+ models) PLUS generation time.
+    # Also used as the Ollama keep_alive value to keep the model in memory
+    # between pipeline nodes and avoid repeated cold-start penalties.
+    LLM_TIMEOUT: int = field(default_factory=lambda: _env_int("LLM_TIMEOUT", 300))
     GEMINI_MODEL: str = field(default_factory=lambda: _env("GEMINI_MODEL", "gemini-1.5-flash"))
 
     # -- Profiler --
@@ -101,6 +106,7 @@ class Settings:
 
     # -- App --
     APP_TITLE: str = field(default_factory=lambda: _env("APP_TITLE", "AutoInsight AI"))
+    CRITIC_BATCH_SIZE: int = field(default_factory=lambda: _env_int("CRITIC_BATCH_SIZE", 6))
 
     # -- LangFuse external observability (optional) --
     LANGFUSE_ENABLED: bool = field(default_factory=lambda: _env_bool("LANGFUSE_ENABLED", False))

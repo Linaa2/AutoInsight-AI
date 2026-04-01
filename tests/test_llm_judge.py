@@ -17,6 +17,8 @@ import pytest
 from evaluation.config import (
     EVAL_EXCELLENT_THRESHOLD,
     EVAL_FAIR_THRESHOLD,
+    EVAL_JUDGE_MODEL,
+    EVAL_JUDGE_TIMEOUT,
 )
 from evaluation.llm_judge import (
     EvaluationAgent,
@@ -320,6 +322,12 @@ def test_parse_partial_criteria_fill_defaults() -> None:
         assert c.score == 0.5, f"Expected 0.5 for {c.name}, got {c.score}"
 
 
+def test_parse_response_uses_explicit_judge_model() -> None:
+    raw = _make_profiler_response_json()
+    result = parse_judge_response(raw, "profiler", judge_model="judge-x")
+    assert result.judge_model == "judge-x"
+
+
 # ---------------------------------------------------------------------------
 # Weighted score and grade
 # ---------------------------------------------------------------------------
@@ -369,6 +377,8 @@ def test_evaluate_profiler_calls_llm_once() -> None:
         agent = EvaluationAgent()
         result = agent.evaluate_profiler(PROFILER_SECTION_TEXT, SAMPLE_PROFILE_DATA)
     mock_llm.assert_called_once()
+    assert mock_llm.call_args.kwargs["model"] == EVAL_JUDGE_MODEL
+    assert mock_llm.call_args.kwargs["timeout"] == EVAL_JUDGE_TIMEOUT
     assert isinstance(result, EvaluationResult)
 
 
@@ -377,6 +387,8 @@ def test_evaluate_analyst_calls_llm_once() -> None:
         agent = EvaluationAgent()
         result = agent.evaluate_analyst(SAMPLE_INSIGHTS, PROFILER_SECTION_TEXT, SAMPLE_PROFILE_DATA)
     mock_llm.assert_called_once()
+    assert mock_llm.call_args.kwargs["model"] == EVAL_JUDGE_MODEL
+    assert mock_llm.call_args.kwargs["timeout"] == EVAL_JUDGE_TIMEOUT
     assert isinstance(result, AnalystEvaluationResult)
 
 
@@ -393,6 +405,8 @@ def test_evaluate_reporter_calls_llm_once() -> None:
         agent = EvaluationAgent()
         result = agent.evaluate_reporter(report_text, PROFILER_SECTION_TEXT, "insights md")
     mock_llm.assert_called_once()
+    assert mock_llm.call_args.kwargs["model"] == EVAL_JUDGE_MODEL
+    assert mock_llm.call_args.kwargs["timeout"] == EVAL_JUDGE_TIMEOUT
     assert isinstance(result, EvaluationResult)
 
 
@@ -496,7 +510,17 @@ def test_evaluate_profiler_no_llm_fallback() -> None:
     assert isinstance(result, EvaluationResult)
     assert result.overall_score == 0.5
     assert result.grade == "fair"
+    assert result.judge_model == EVAL_JUDGE_MODEL
     assert "LLM unavailable" in result.critique or "unavailable" in result.critique.lower()
+
+
+def test_evaluation_agent_allows_explicit_judge_model_and_timeout() -> None:
+    with patch(_LLM_PATH, return_value=_make_profiler_response_json()) as mock_llm:
+        agent = EvaluationAgent(judge_model="judge-y", judge_timeout=420)
+        result = agent.evaluate_profiler(PROFILER_SECTION_TEXT, SAMPLE_PROFILE_DATA)
+    assert result.judge_model == "judge-y"
+    assert mock_llm.call_args.kwargs["model"] == "judge-y"
+    assert mock_llm.call_args.kwargs["timeout"] == 420
 
 
 # ---------------------------------------------------------------------------

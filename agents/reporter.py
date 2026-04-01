@@ -20,6 +20,11 @@ Output:
 
 import logging
 
+from agents.context_digest import (
+    build_confidence_digest,
+    build_critiques_digest,
+    build_profile_digest,
+)
 from utils.llm import call_llm_with_messages
 from utils.prompt_loader import load_prompt_section
 
@@ -114,6 +119,9 @@ class ReporterAgent:
         rag_context: str = "",
         critic_output: str = "",
         uncertainty_output: str = "",
+        profile_data: dict | None = None,
+        critiques: list[dict] | None = None,
+        confidence_scores: list[dict] | None = None,
         callbacks: list | None = None,
     ) -> dict:
         """
@@ -135,11 +143,29 @@ class ReporterAgent:
         try:
             charts_summary = build_charts_summary(visualizer_output)
             insights_summary = build_insights_summary(insights)
+            profile_summary = (
+                build_profile_digest(profile_data) if profile_data else profiler_output
+            )
+            analyst_context = (
+                f"{len(insights or [])} structured insights are summarized below."
+                if insights
+                else analyst_output
+            )
+            critique_summary = (
+                build_critiques_digest(critiques)
+                if critiques
+                else critic_output or "No critique summary available."
+            )
+            confidence_summary = (
+                build_confidence_digest(confidence_scores)
+                if confidence_scores
+                else uncertainty_output or "No confidence summary available."
+            )
 
             system_prompt = PROMPTS["reporter"]["system"]
             human_prompt = PROMPTS["reporter"]["human"].format(
-                profiler_output=profiler_output,
-                analyst_output=analyst_output,
+                profiler_output=profile_summary or profiler_output,
+                analyst_output=analyst_context,
                 insights_summary=insights_summary,
                 charts_summary=charts_summary,
             )
@@ -154,28 +180,29 @@ class ReporterAgent:
                 )
 
             # Append critic review when available
-            if critic_output and critic_output.strip():
+            if critique_summary and critique_summary.strip():
                 human_prompt += (
                     "\n\n## 🔎 Critic Review\n"
                     "Each insight was reviewed by an adversarial critic. Integrate "
                     "the critique into the Key Insights section — mention weaknesses "
                     "or alternative explanations where the verdict is "
-                    "'partially_supported' or 'weak'.\n\n" + critic_output.strip()
+                    "'partially_supported' or 'weak'.\n\n" + critique_summary.strip()
                 )
 
             # Append uncertainty confidence scores when available
-            if uncertainty_output and uncertainty_output.strip():
+            if confidence_summary and confidence_summary.strip():
                 human_prompt += (
                     "\n\n## 🎯 Insight Confidence Scores\n"
                     "The following table shows the data-driven confidence level for each "
                     "insight. When writing the Key Insights section, qualify insights with "
-                    "low or medium confidence accordingly.\n\n" + uncertainty_output.strip()
+                    "low or medium confidence accordingly.\n\n" + confidence_summary.strip()
                 )
 
             raw = call_llm_with_messages(
                 system=system_prompt,
                 human=human_prompt,
                 callbacks=callbacks,
+                task="reporter",
             )
 
             logger.info(f"ReporterAgent: report generated ({len(raw)} chars)")
@@ -231,4 +258,7 @@ def reporter_node(state: dict) -> dict:
         visualizer_output=visualizer_output,
         critic_output=critic_output,
         uncertainty_output=uncertainty_output,
+        profile_data=state.get("profile_data"),
+        critiques=state.get("critiques"),
+        confidence_scores=state.get("confidence_scores"),
     )

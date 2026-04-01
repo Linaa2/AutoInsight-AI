@@ -24,6 +24,11 @@ from streamlit_flow.elements import StreamlitFlowEdge, StreamlitFlowNode
 from streamlit_flow.layouts import ManualLayout
 from streamlit_flow.state import StreamlitFlowState
 
+from diagnostics.pipeline_layout import (
+    PIPELINE_NODE_ORDER,
+    PIPELINE_ROWS,
+)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -33,13 +38,14 @@ _STATUS_BADGE: dict[str, str] = {"success": "✅", "failed": "❌", "skipped": "
 _AGENT_META: dict[str, dict[str, str]] = {
     "profiler": {"icon": "📊", "label": "Profiler"},
     "analyst": {"icon": "💡", "label": "Analyst"},
-    "uncertainty": {"icon": "🎯", "label": "Confidence"},
+    "critic": {"icon": "✏️", "label": "Critic"},
+    "uncertainty": {"icon": "📐", "label": "Uncertainty"},
     "visualizer": {"icon": "📈", "label": "Visualizer"},
     "reporter": {"icon": "📄", "label": "Reporter"},
-    "rag_storage": {"icon": "🧠", "label": "RAG Storage"},
+    "rag_storage": {"icon": "🧠", "label": "Memory"},
 }
 
-_NODE_ORDER = ["profiler", "analyst", "uncertainty", "visualizer", "reporter", "rag_storage"]
+_NODE_ORDER = list(PIPELINE_NODE_ORDER)
 
 # LLM Judge — post-run node (not part of the automated pipeline)
 _LLM_JUDGE_STYLE_PENDING: dict[str, str] = {
@@ -95,19 +101,19 @@ _STATUS_STYLE: dict[str, dict[str, str]] = {
 # React Flow pipeline canvas
 # ---------------------------------------------------------------------------
 
-# Horizontal positions: START + pipeline agents + END + LLM Judge, spaced 200 px apart
-_NODE_X: dict[str, float] = {
-    "start": 0,
-    "profiler": 200,
-    "analyst": 400,
-    "uncertainty": 600,
-    "visualizer": 800,
-    "reporter": 1000,
-    "rag_storage": 1000,  # shares column with reporter (rendered below)
-    "end": 1200,
-    "llm_judge": 1400,
+_ROW_Y = (40, 220)
+_ROW_START_X = (0, 110)
+_NODE_X_STEP = 220
+
+_NODE_POSITIONS: dict[str, tuple[float, float]] = {
+    node_id: (_ROW_START_X[row_index] + (col_index * _NODE_X_STEP), _ROW_Y[row_index])
+    for row_index, row in enumerate(PIPELINE_ROWS)
+    for col_index, node_id in enumerate(row)
 }
-_NODE_Y = 80  # vertical centre for all nodes
+_NODE_POSITIONS["llm_judge"] = (
+    _NODE_POSITIONS["end"][0] + _NODE_X_STEP,
+    _NODE_POSITIONS["end"][1],
+)
 
 _SENTINEL_STYLE: dict[str, str] = {
     "background": "#e0e7ff",
@@ -119,6 +125,20 @@ _SENTINEL_STYLE: dict[str, str] = {
     "fontSize": "13px",
     "boxShadow": "0 2px 6px rgba(0,0,0,0.12)",
 }
+
+
+def _node_source_position(node_id: str) -> str:
+    """Return the preferred source port for a pipeline node."""
+    if node_id == "uncertainty":
+        return "bottom"
+    return "right"
+
+
+def _node_target_position(node_id: str) -> str:
+    """Return the preferred target port for a pipeline node."""
+    if node_id == "visualizer":
+        return "top"
+    return "left"
 
 
 def _agent_flow_node(
@@ -140,11 +160,11 @@ def _agent_flow_node(
     content = "<br>".join(label_lines)
     return StreamlitFlowNode(
         id=node_id,
-        pos=(_NODE_X.get(node_id, 0), _NODE_Y),
+        pos=_NODE_POSITIONS.get(node_id, (0, 40)),
         data={"content": content},
         node_type="default",
-        source_position="right",
-        target_position="left",
+        source_position=_node_source_position(node_id),
+        target_position=_node_target_position(node_id),
         draggable=False,
         selectable=False,
         connectable=False,
@@ -169,7 +189,7 @@ def _render_pipeline_diagram(
     nodes.append(
         StreamlitFlowNode(
             id="start",
-            pos=(_NODE_X["start"], _NODE_Y),
+            pos=_NODE_POSITIONS["start"],
             data={"content": "▶ START"},
             node_type="input",
             source_position="right",
@@ -215,7 +235,7 @@ def _render_pipeline_diagram(
     nodes.append(
         StreamlitFlowNode(
             id="end",
-            pos=(_NODE_X["end"], _NODE_Y),
+            pos=_NODE_POSITIONS["end"],
             data={"content": "■ END"},
             node_type="output",
             source_position="right",
@@ -248,7 +268,7 @@ def _render_pipeline_diagram(
     nodes.append(
         StreamlitFlowNode(
             id="llm_judge",
-            pos=(_NODE_X["llm_judge"], _NODE_Y),
+            pos=_NODE_POSITIONS["llm_judge"],
             data={"content": judge_label},
             node_type="default",
             source_position="right",
@@ -276,7 +296,7 @@ def _render_pipeline_diagram(
     streamlit_flow(
         key=f"pipeline_flow{key_suffix}",
         state=flow_state,
-        height=220,
+        height=320,
         fit_view=True,
         show_controls=False,
         show_minimap=False,

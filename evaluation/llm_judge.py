@@ -31,7 +31,12 @@ import re
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from evaluation.config import EVAL_MAX_INSIGHT_FIELD_CHARS, EVAL_MAX_SECTION_CHARS
+from evaluation.config import (
+    EVAL_JUDGE_MODEL,
+    EVAL_JUDGE_TIMEOUT,
+    EVAL_MAX_INSIGHT_FIELD_CHARS,
+    EVAL_MAX_SECTION_CHARS,
+)
 from evaluation.rubrics import RUBRICS
 from evaluation.schemas import (
     AnalystEvaluationResult,
@@ -374,10 +379,13 @@ def _build_uncertainty_context(confidence_scores: list[dict[str, Any]]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _fallback_result(artifact_type: str, reason: str) -> EvaluationResult:
+def _fallback_result(
+    artifact_type: str,
+    reason: str,
+    *,
+    judge_model: str = EVAL_JUDGE_MODEL,
+) -> EvaluationResult:
     """Return a neutral EvaluationResult when the LLM call fails or returns garbage."""
-    from config.settings import settings
-
     rubric = RUBRICS.get(artifact_type, [])
     criteria = [
         EvaluationCriterion(
@@ -396,7 +404,7 @@ def _fallback_result(artifact_type: str, reason: str) -> EvaluationResult:
         "criteria": criteria,
         "critique": f"Evaluation unavailable — {reason[:200]}",
         "suggestions": ["Re-run evaluation when the LLM is available."],
-        "judge_model": settings.OLLAMA_TEXT_MODEL,
+        "judge_model": judge_model,
         "timestamp": _now_iso(),
     }
     if artifact_type == "analyst":
@@ -404,7 +412,12 @@ def _fallback_result(artifact_type: str, reason: str) -> EvaluationResult:
     return EvaluationResult(**base_kwargs)
 
 
-def parse_judge_response(raw_json: str, artifact_type: str) -> EvaluationResult:
+def parse_judge_response(
+    raw_json: str,
+    artifact_type: str,
+    *,
+    judge_model: str = EVAL_JUDGE_MODEL,
+) -> EvaluationResult:
     """Parse an LLM judge response into a typed EvaluationResult.
 
     Missing criteria are filled with defaults (score=0.5, rationale="Not evaluated").
@@ -417,17 +430,18 @@ def parse_judge_response(raw_json: str, artifact_type: str) -> EvaluationResult:
     Returns:
         ``EvaluationResult`` (or ``AnalystEvaluationResult`` for analyst).
     """
-    from config.settings import settings
-
     rubric = RUBRICS.get(artifact_type, [])
     timestamp = _now_iso()
-    judge_model = settings.OLLAMA_TEXT_MODEL
 
     try:
         data = _extract_json(raw_json)
     except ValueError as exc:
         logger.warning("parse_judge_response: %s", exc)
-        return _fallback_result(artifact_type, f"JSON parse failed: {raw_json[:80]}")
+        return _fallback_result(
+            artifact_type,
+            f"JSON parse failed: {raw_json[:80]}",
+            judge_model=judge_model,
+        )
 
     criteria_raw: dict[str, Any] = data.get("criteria", {})
     criteria: list[EvaluationCriterion] = []
@@ -522,6 +536,25 @@ class EvaluationAgent:
                                                   insights_markdown)
     """
 
+    def __init__(
+        self,
+        *,
+        judge_model: str = EVAL_JUDGE_MODEL,
+        judge_timeout: int = EVAL_JUDGE_TIMEOUT,
+    ) -> None:
+        self._judge_model = judge_model
+        self._judge_timeout = judge_timeout
+
+    def _call_judge(self, system: str, human: str, callbacks: list[Any] | None = None) -> str:
+        """Run one judge request using the evaluation-specific model budget."""
+        return call_llm_with_messages(
+            system=system,
+            human=human,
+            model=self._judge_model,
+            callbacks=callbacks,
+            timeout=self._judge_timeout,
+        )
+
     def evaluate_profiler(
         self,
         profile_markdown: str,
@@ -551,12 +584,12 @@ class EvaluationAgent:
         human = _build_human_prompt("profiler", truncated, validator_results)
 
         try:
-            raw = call_llm_with_messages(system=system, human=human, callbacks=callbacks)
+            raw = self._call_judge(system=system, human=human, callbacks=callbacks)
             logger.info("EvaluationAgent.evaluate_profiler: LLM returned %d chars", len(raw))
-            return parse_judge_response(raw, "profiler")
+            return parse_judge_response(raw, "profiler", judge_model=self._judge_model)
         except Exception as exc:
             logger.error("EvaluationAgent.evaluate_profiler failed: %s", exc, exc_info=True)
-            return _fallback_result("profiler", str(exc))
+            return _fallback_result("profiler", str(exc), judge_model=self._judge_model)
 
     def evaluate_analyst(
         self,
@@ -612,13 +645,16 @@ class EvaluationAgent:
         human = _build_human_prompt("analyst", content, validator_results, context_hints)
 
         try:
-            raw = call_llm_with_messages(system=system, human=human, callbacks=callbacks)
+            raw = self._call_judge(system=system, human=human, callbacks=callbacks)
             logger.info("EvaluationAgent.evaluate_analyst: LLM returned %d chars", len(raw))
-            result = parse_judge_response(raw, "analyst")
+            result = parse_judge_response(raw, "analyst", judge_model=self._judge_model)
             return cast("AnalystEvaluationResult", result)
         except Exception as exc:
             logger.error("EvaluationAgent.evaluate_analyst failed: %s", exc, exc_info=True)
-            return cast("AnalystEvaluationResult", _fallback_result("analyst", str(exc)))
+            return cast(
+                "AnalystEvaluationResult",
+                _fallback_result("analyst", str(exc), judge_model=self._judge_model),
+            )
 
     def evaluate_reporter(
         self,
@@ -660,9 +696,9 @@ class EvaluationAgent:
         human = _build_human_prompt("reporter", content, validator_results)
 
         try:
-            raw = call_llm_with_messages(system=system, human=human, callbacks=callbacks)
+            raw = self._call_judge(system=system, human=human, callbacks=callbacks)
             logger.info("EvaluationAgent.evaluate_reporter: LLM returned %d chars", len(raw))
-            return parse_judge_response(raw, "reporter")
+            return parse_judge_response(raw, "reporter", judge_model=self._judge_model)
         except Exception as exc:
             logger.error("EvaluationAgent.evaluate_reporter failed: %s", exc, exc_info=True)
-            return _fallback_result("reporter", str(exc))
+            return _fallback_result("reporter", str(exc), judge_model=self._judge_model)

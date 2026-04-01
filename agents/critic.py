@@ -35,6 +35,8 @@ import logging
 import re
 from typing import ClassVar
 
+from agents.context_digest import build_profile_digest
+from config.settings import settings
 from utils.llm import call_llm_with_messages
 from utils.prompt_loader import load_prompt_section
 
@@ -55,8 +57,15 @@ PROMPTS = load_prompt_section("critic")
 
 
 def extract_json(raw: str) -> dict | None:
-    """Extract a JSON object from a potentially noisy LLM response."""
-    cleaned = re.sub(r"```(?:json)?\s*", "", raw)
+    """Extract a JSON object from a potentially noisy LLM response.
+
+    Handles chain-of-thought reasoning blocks (<think>…</think>) emitted by
+    models such as qwen3 before the actual JSON answer.
+    """
+    # Remove reasoning blocks first — they appear before the real answer and
+    # contain their own curly braces that confuse the JSON extractor.
+    cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+    cleaned = re.sub(r"```(?:json)?\s*", "", cleaned)
     cleaned = cleaned.replace("```", "").strip()
 
     start = cleaned.find("{")
@@ -201,11 +210,18 @@ class CriticAgent:
         """
         try:
             critiques: list[dict] = []
+            profile_summary = build_profile_digest(profile_data)
+            batch_size = max(1, settings.CRITIC_BATCH_SIZE)
 
-            for insight in insights:
-                critique = self._critique_single(insight, profile_data)
-                if critique:
-                    critiques.append(critique)
+            for start in range(0, len(insights), batch_size):
+                chunk = insights[start : start + batch_size]
+                critiques.extend(
+                    self._critique_batch(
+                        chunk,
+                        profile_summary=profile_summary,
+                        profile_data=profile_data,
+                    )
+                )
 
             markdown = self.formatter.to_markdown(critiques)
 
@@ -228,26 +244,108 @@ class CriticAgent:
         self,
         insight: dict,
         profile_data: dict | None = None,
-    ) -> dict | None:
-        """Critique a single insight using the LLM."""
+        *,
+        profile_summary: str | None = None,
+    ) -> dict:
+        """Critique a single insight using the LLM.
+
+        Always returns a critique dict — falls back to a graceful placeholder
+        when the LLM response cannot be parsed, so the critic never silently
+        drops an insight from its output.
+        """
+        title = insight.get("title", "Untitled")
         try:
             system_prompt = PROMPTS["system"]
             human_prompt = PROMPTS["human"].format(
                 insight_json=json.dumps(insight, ensure_ascii=False, indent=2),
-                profile_summary=self._build_profile_summary(profile_data),
+                profile_summary=profile_summary or build_profile_digest(profile_data),
             )
 
-            raw = call_llm_with_messages(system=system_prompt, human=human_prompt)
+            raw = call_llm_with_messages(
+                system=system_prompt,
+                human=human_prompt,
+                task="critic",
+            )
             critique = self._parse_response(raw)
 
             if critique:
-                critique["insight_title"] = insight.get("title", "Untitled")
+                critique["insight_title"] = title
+                return critique
 
-            return critique
+            # Parse failed — emit a fallback so this insight is still acknowledged.
+            logger.warning("Critic could not parse LLM response for '%s'; using fallback.", title)
+            return self._fallback_critique(title, reason="parse_error")
 
         except Exception as e:
-            logger.warning(f"Failed to critique insight '{insight.get('title', '?')}': {e}")
-            return None
+            logger.warning("Failed to critique insight '%s': %s", title, e)
+            return self._fallback_critique(title, reason=str(e))
+
+    def _critique_batch(
+        self,
+        insights: list[dict],
+        *,
+        profile_summary: str,
+        profile_data: dict | None = None,
+    ) -> list[dict]:
+        """Critique a chunk of insights in one LLM call, with safe fallback."""
+        if not insights:
+            return []
+
+        requests_text = "\n\n".join(
+            "\n".join(
+                [
+                    f"### Insight {index}",
+                    "```json",
+                    json.dumps(insight, ensure_ascii=False, indent=2),
+                    "```",
+                ]
+            )
+            for index, insight in enumerate(insights)
+        )
+
+        critiques_by_index: dict[int, dict] = {}
+        try:
+            raw = call_llm_with_messages(
+                system=PROMPTS["system"],
+                human=PROMPTS["batch_human"].format(
+                    profile_summary=profile_summary,
+                    requests_text=requests_text,
+                ),
+                task="critic",
+            )
+            critiques_by_index = self._parse_batch_response(raw)
+        except Exception as exc:
+            logger.warning("Critic batch call failed: %s", exc)
+
+        critiques: list[dict] = []
+        for index, insight in enumerate(insights):
+            critique = critiques_by_index.get(index)
+            if critique is not None:
+                critique["insight_title"] = insight.get("title", "Untitled")
+                critiques.append(critique)
+                continue
+
+            critiques.append(
+                self._critique_single(
+                    insight,
+                    profile_data=profile_data,
+                    profile_summary=profile_summary,
+                )
+            )
+
+        return critiques
+
+    @staticmethod
+    def _fallback_critique(title: str, reason: str = "unknown") -> dict:
+        """Return a conservative fallback critique when the LLM response is unusable."""
+        return {
+            "insight_title": title,
+            "strengths": "Could not be assessed — LLM response was unparseable.",
+            "weaknesses": f"Automatic review failed ({reason}). Manual review recommended.",
+            "alternatives": "N/A",
+            "confidence": "low",
+            "verdict": "partially_supported",
+        }
 
     def _parse_response(self, raw: str) -> dict | None:
         """Parse LLM response into a validated critique dict."""
@@ -261,28 +359,41 @@ class CriticAgent:
         logger.warning(f"Failed to parse critique. Raw:\n{raw[:300]}")
         return None
 
-    def _build_profile_summary(self, profile_data: dict | None) -> str:
-        """Build a compact profile summary for the LLM context."""
-        if not profile_data:
-            return "No structured profile available."
+    def _parse_batch_response(self, raw: str) -> dict[int, dict]:
+        """Parse a batched critique response keyed by chunk-local index."""
+        parsed = extract_json(raw)
+        if not parsed:
+            logger.warning("Failed to parse batched critique response. Raw:\n%s", raw[:300])
+            return {}
 
-        shape = profile_data.get("shape", {})
-        missing = profile_data.get("missing_values", {})
-        duplicates = profile_data.get("duplicates", 0)
+        items = parsed.get("critiques", [])
+        if not isinstance(items, list):
+            return {}
 
-        columns = []
-        for col in profile_data.get("columns", []):
-            col_str = f"  - {col['name']} ({col['dtype']}): {col.get('unique', '?')} unique"
-            if col.get("missing_pct", 0) > 0:
-                col_str += f", {col['missing_pct']}% missing"
-            columns.append(col_str)
+        critiques_by_index: dict[int, dict] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                index = int(item.get("index"))
+            except (TypeError, ValueError):
+                continue
 
-        return (
-            f"Rows: {shape.get('rows', '?')}, Columns: {shape.get('cols', '?')}\n"
-            f"Duplicates: {duplicates}\n"
-            f"Missing values: {json.dumps(missing, ensure_ascii=False)}\n"
-            f"Columns:\n" + "\n".join(columns)
-        )
+            critique = {
+                "strengths": item.get("strengths", ""),
+                "weaknesses": item.get("weaknesses", ""),
+                "alternatives": item.get("alternatives", ""),
+                "confidence": item.get("confidence", ""),
+                "verdict": item.get("verdict", ""),
+            }
+            if not validate_critique(critique):
+                continue
+
+            critique["verdict"] = normalize_verdict(str(critique["verdict"]))
+            critique["confidence"] = normalize_confidence(str(critique["confidence"]))
+            critiques_by_index[index] = critique
+
+        return critiques_by_index
 
 
 # ═══════════════════════════════════════════════════════════════════════════

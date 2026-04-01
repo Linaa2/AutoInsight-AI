@@ -252,10 +252,9 @@ evaluation/llm_judge.py
 
 ```python
 # LLM Judge
-EVAL_JUDGE_MODEL: str = os.getenv(
-    "EVAL_JUDGE_MODEL",
-    os.getenv("OLLAMA_TEXT_MODEL", "qwen3:14b")
-)
+# Defaults to the active provider's text model when unset.
+EVAL_JUDGE_MODEL: str = ...
+EVAL_JUDGE_TIMEOUT: int = int(os.getenv("EVAL_JUDGE_TIMEOUT", "300"))
 EVAL_MAX_SECTION_CHARS: int  = int(os.getenv("EVAL_MAX_SECTION_CHARS",  "300"))
 EVAL_MAX_INSIGHT_FIELD_CHARS: int = int(os.getenv("EVAL_MAX_INSIGHT_FIELD_CHARS", "150"))
 
@@ -278,6 +277,9 @@ EVAL_FAIR_THRESHOLD: float      = float(os.getenv("EVAL_FAIR_THRESHOLD",      "0
 | Reporter | 1 | Rubric scores + overall critique + suggestions |
 
 **Total: 3 LLM calls** when all three artifacts are evaluated.
+
+Judge calls use `EVAL_JUDGE_MODEL` and `EVAL_JUDGE_TIMEOUT`, so evaluation can
+run with a lighter model and/or a longer timeout budget than the main pipeline.
 
 ### Section-aware truncation
 
