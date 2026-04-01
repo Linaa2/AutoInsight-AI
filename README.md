@@ -17,20 +17,21 @@
 ## Table of Contents
 
 1. [Project Overview](#project-overview)
-2. [What the App Does](#what-the-app-does)
-3. [Architecture at a Glance](#architecture-at-a-glance)
-4. [Tech Stack](#tech-stack)
-5. [Repository Structure](#repository-structure)
-6. [Quick Start for a Teacher or Evaluator](#quick-start-for-a-teacher-or-evaluator)
-7. [Full Local Setup](#full-local-setup)
-8. [Environment Configuration](#environment-configuration)
-9. [Run the Application](#run-the-application)
-10. [How to Test That It Works](#how-to-test-that-it-works)
-11. [Optional LangFuse Observability](#optional-langfuse-observability)
-12. [Sample Datasets](#sample-datasets)
-13. [Useful Commands](#useful-commands)
-14. [Troubleshooting](#troubleshooting)
-15. [Authors](#authors)
+2. [Presentation Material](#presentation-material)
+3. [What the App Does](#what-the-app-does)
+4. [Architecture at a Glance](#architecture-at-a-glance)
+5. [Tech Stack](#tech-stack)
+6. [Repository Structure](#repository-structure)
+7. [Quick Start for a Teacher or Evaluator](#quick-start-for-a-teacher-or-evaluator)
+8. [Full Local Setup](#full-local-setup)
+9. [Environment Configuration](#environment-configuration)
+10. [Run the Application](#run-the-application)
+11. [How to Test That It Works](#how-to-test-that-it-works)
+12. [Optional LangFuse Observability](#optional-langfuse-observability)
+13. [Sample Datasets](#sample-datasets)
+14. [Useful Commands](#useful-commands)
+15. [Troubleshooting](#troubleshooting)
+16. [Authors](#authors)
 
 ---
 
@@ -48,9 +49,49 @@ The system is orchestrated with LangGraph: each agent is a node in a shared work
 
 ---
 
+## Presentation Material
+
+The project presentation deck is available here:
+
+- [AutoInsight_AI_Presentation.pptx](./AutoInsight_AI_Presentation.pptx)
+
+For written technical documentation, see:
+
+- [docs/README.md](./docs/README.md)
+
+---
+
 ## What the App Does
 
 For one uploaded file, the application runs the following workflow:
+
+```mermaid
+flowchart TB
+    subgraph TOP[" "]
+        direction LR
+        START([START]) --> PROF[Profiler] --> ANAL[Analyst] --> CRIT[Critic] --> UNC[Uncertainty]
+    end
+
+    subgraph BOTTOM[" "]
+        direction LR
+        VIZ[Visualizer] --> REP[Reporter] --> MEM[Memory] --> END([END])
+    end
+
+    UNC --> VIZ
+    END -. post-run .-> JUDGE[LLM Judge]
+
+    classDef step fill:#eef2ff,stroke:#6366f1,stroke-width:1.5px,color:#1f2937;
+    classDef terminal fill:#e0e7ff,stroke:#4338ca,stroke-width:2px,color:#312e81;
+    classDef postrun fill:#f5f3ff,stroke:#7c3aed,stroke-width:1.5px,color:#4c1d95;
+
+    class PROF,ANAL,CRIT,UNC,VIZ,REP,MEM step;
+    class START,END terminal;
+    class JUDGE postrun;
+```
+
+The automated pipeline ends at `END`. `LLM Judge` is a post-run evaluation feature shown in the app after the main pipeline completes.
+
+Equivalent linear view:
 
 ```text
 START
@@ -60,7 +101,7 @@ START
   -> Uncertainty
   -> Visualizer
   -> Reporter
-  -> RAG Storage
+  -> Memory (RAG Storage)
 END
 ```
 
@@ -74,7 +115,7 @@ END
 | `Uncertainty` | Assigns confidence scores to insights |
 | `Visualizer` | Proposes and renders Plotly charts |
 | `Reporter` | Synthesizes everything into a final executive report |
-| `RAG Storage` | Stores run artifacts in ChromaDB for future context reuse |
+| `Memory (RAG Storage)` | Stores run artifacts in ChromaDB for future context reuse |
 
 ---
 
