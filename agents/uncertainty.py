@@ -464,8 +464,11 @@ def _compute_llm_scores_batch(
         for item in results_raw:
             if not isinstance(item, dict):
                 continue
+            raw_index = item.get("index")
+            if raw_index is None:
+                continue
             try:
-                index = int(item.get("index"))
+                index = int(raw_index)
             except (TypeError, ValueError):
                 continue
             if index not in resolved:
