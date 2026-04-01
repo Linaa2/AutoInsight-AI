@@ -5,7 +5,7 @@ Système multi-agent d'analyse de données automatique — LangGraph + Ollama, a
 ## Stack
 | Composant | Outil |
 |---|---|
-| LLM primaire | Ollama (`qwen3:14b` / `qwen2.5-coder:14b` par défaut) |
+| LLM primaire | Ollama (`qwen3:4b` light / `qwen3:14b` text / `qwen2.5-coder:14b` code par défaut) |
 | LLM optionnel | Gemini (`gemini-1.5-flash`) |
 | Orchestration | LangGraph |
 | Monitoring | LangFuse |

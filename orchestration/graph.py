@@ -34,6 +34,7 @@ import pandas as pd
 from langgraph.graph import END, START, StateGraph
 
 from agents.analyst import AnalystAgent
+from agents.context_digest import build_insights_digest, build_profile_digest
 from agents.critic import CriticAgent
 from agents.profiler import ProfilerAgent
 from agents.reporter import ReporterAgent
@@ -463,9 +464,17 @@ def visualizer_node(state: PipelineState) -> PipelineState:
             dataset_key = _dataset_key(state)
             df = _resolve_dataframe(state)
             columns_info = ", ".join(f"{col} ({dtype})" for col, dtype in df.dtypes.items())
+            profile_data = state.get("profile_data")
+            insights = state.get("insights")
+            profile_context = (
+                build_profile_digest(profile_data) if profile_data else (profile_md or "")
+            )
+            insights_context = (
+                build_insights_digest(insights) if insights else (insights_md or profile_context)
+            )
             request = VisualizerRequest(
-                profile_markdown=profile_md,
-                insights_markdown=insights_md,
+                profile_markdown=profile_context,
+                insights_markdown=insights_context,
                 columns_info=columns_info,
             )
 
@@ -616,6 +625,9 @@ def reporter_node(state: PipelineState) -> PipelineState:
                 rag_context=rag_context,
                 critic_output=state.get("critic_output") or "",
                 uncertainty_output=state.get("uncertainty_output") or "",
+                profile_data=state.get("profile_data") or {},
+                critiques=state.get("critiques") or [],
+                confidence_scores=state.get("confidence_scores") or [],
                 callbacks=callbacks,
             )
             llm_end = time.time()

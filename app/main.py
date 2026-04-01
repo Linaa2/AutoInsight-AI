@@ -24,7 +24,15 @@ from app.memory_view import (
     retrieve_insights_by_category,
 )
 from config.settings import REPO_ROOT, settings
-from diagnostics.renderer import render_diagnostics_tab, render_pipeline_diagram
+from diagnostics.pipeline_layout import (
+    PIPELINE_NODE_ORDER,
+    PIPELINE_ROWS,
+    PIPELINE_STATUS_CAPTION,
+)
+from diagnostics.renderer import (
+    render_diagnostics_tab,
+    render_pipeline_diagram,
+)
 from orchestration.graph import _AGENTS_ORDER as _CONTENT_AGENT_ORDER
 from orchestration.graph import stream_analysis
 from tools.data_loader import DataLoader, UnsupportedFormatError
@@ -51,17 +59,17 @@ _BROKEN_AGENT_PATH = _ASSETS_DIR / "ai_agent_broken.png"
 _AGENT_META: dict[str, dict[str, str]] = {
     "profiler": {"icon": "📊", "label": "Profiler", "verb": "Profiling dataset…"},
     "analyst": {"icon": "💡", "label": "Analyst", "verb": "Generating insights…"},
-    "critic": {"icon": "🔎", "label": "Evaluation", "verb": "Reviewing insights…"},
-    "uncertainty": {"icon": "🎯", "label": "Evaluation", "verb": "Scoring confidence…"},
+    "critic": {"icon": "✏️", "label": "Critic", "verb": "Reviewing insights…"},
+    "uncertainty": {"icon": "📐", "label": "Uncertainty", "verb": "Scoring confidence…"},
     "visualizer": {"icon": "📈", "label": "Visualizer", "verb": "Creating charts…"},
     "reporter": {"icon": "📄", "label": "Reporter", "verb": "Writing report…"},
     "rag_storage": {
         "icon": "🧠",
-        "label": "RAG Storage",
+        "label": "Memory",
         "verb": "Persisting analysis to memory…",
     },
 }
-_PIPELINE_STATUS_ORDER = [*_CONTENT_AGENT_ORDER, "rag_storage"]
+_PIPELINE_STATUS_ORDER = list(PIPELINE_NODE_ORDER)
 _TERMINAL_NODE_STATUSES = {"success", "failed", "skipped"}
 
 _STATUS_BADGE = {"success": "✅", "failed": "❌", "skipped": "⏭️"}
@@ -180,7 +188,7 @@ def _merge_state(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]
 
 
 def _render_html_pipeline_status(
-    completed: list[str],
+    _completed: list[str],
     current_agent: str,
     trace: list[dict[str, Any]],
 ) -> None:
@@ -192,10 +200,6 @@ def _render_html_pipeline_status(
     """
     dur_map = {e["node"]: e.get("duration_s", 0.0) for e in trace if "node" in e}
     status_map = {e["node"]: e.get("status", "pending") for e in trace if "node" in e}
-    last_stage = _PIPELINE_STATUS_ORDER[-1]
-    pipeline_finished = status_map.get(last_stage) in _TERMINAL_NODE_STATUSES or last_stage in set(
-        completed
-    )
 
     _STYLE: dict[str, tuple[str, str, str, str]] = {
         #             bg        border    color     border-style
@@ -207,18 +211,17 @@ def _render_html_pipeline_status(
     }
     _BADGE = {"success": "✅", "failed": "❌", "skipped": "⏭️", "running": "⏳", "pending": "⬜"}
 
-    parts: list[str] = []
+    def _sentinel_html(kind: str) -> str:
+        label = "▶ START" if kind == "start" else "■ END"
+        return (
+            '<div style="background:#e0e7ff;border:2px solid #4338ca;color:#3730a3;'
+            "border-radius:20px;padding:8px 16px;font-weight:700;font-size:12px;"
+            "font-family:sans-serif;white-space:nowrap;"
+            'box-shadow:0 2px 6px rgba(0,0,0,0.10);">'
+            f"{label}</div>"
+        )
 
-    # START sentinel
-    parts.append(
-        '<div style="background:#e0e7ff;border:2px solid #4338ca;color:#3730a3;'
-        "border-radius:20px;padding:8px 16px;font-weight:700;font-size:12px;"
-        "font-family:sans-serif;white-space:nowrap;"
-        'box-shadow:0 2px 6px rgba(0,0,0,0.10);">&#9654; START</div>'
-    )
-
-    prev_done = True  # START is always considered "done"
-    for agent_id in _PIPELINE_STATUS_ORDER:
+    def _agent_html(agent_id: str) -> str:
         meta = _AGENT_META[agent_id]
         status = status_map.get(agent_id, "pending")
         if agent_id == current_agent and status == "pending":
@@ -228,15 +231,7 @@ def _render_html_pipeline_status(
         badge = _BADGE.get(status, "⬜")
         dur = dur_map.get(agent_id, 0.0)
         dur_str = f"{dur:.1f}s" if status not in {"pending", "running"} else "\u2026"
-
-        # Edge arrow between nodes
-        arrow_col = f"#{border}" if prev_done else "#94a3b8"
-        parts.append(
-            f'<div style="color:{arrow_col};font-size:16px;flex-shrink:0;'
-            f'padding:0 4px;opacity:{1.0 if prev_done else 0.4};">&#8212;&#9654;</div>'
-        )
-
-        parts.append(
+        return (
             f'<div style="background:#{bg};border:2px {bstyle} #{border};color:#{color};'
             f"border-radius:10px;padding:10px 14px;min-width:110px;text-align:center;"
             f"font-family:sans-serif;font-size:13px;flex-shrink:0;"
@@ -245,22 +240,26 @@ def _render_html_pipeline_status(
             f'<div style="font-size:11px;margin-top:4px;">{badge} {status.capitalize()} · {dur_str}</div>'
             f"</div>"
         )
-        prev_done = status in _TERMINAL_NODE_STATUSES
 
-    # END sentinel edge + node
-    end_col = "#059669" if pipeline_finished else "#94a3b8"
-    parts.append(
-        f'<div style="color:{end_col};font-size:16px;flex-shrink:0;'
-        f'padding:0 4px;opacity:{1.0 if pipeline_finished else 0.4};">&#8212;&#9654;</div>'
-    )
-    parts.append(
-        '<div style="background:#e0e7ff;border:2px solid #4338ca;color:#3730a3;'
-        "border-radius:20px;padding:8px 16px;font-weight:700;font-size:12px;"
-        "font-family:sans-serif;white-space:nowrap;"
-        'box-shadow:0 2px 6px rgba(0,0,0,0.10);">&#9632; END</div>'
-    )
+    def _row_html(row: list[str]) -> str:
+        parts: list[str] = []
+        for index, node_id in enumerate(row):
+            if index > 0:
+                parts.append(
+                    '<div style="color:#6366f1;font-size:16px;flex-shrink:0;padding:0 4px;">'
+                    "&#8212;&#9654;</div>"
+                )
 
-    # LLM Judge — post-run, user-triggered (shown after END with distinct purple styling)
+            if node_id == "start" or node_id == "end":
+                parts.append(_sentinel_html(node_id))
+            else:
+                parts.append(_agent_html(node_id))
+
+        return (
+            '<div style="display:flex;align-items:center;justify-content:center;'
+            'gap:2px;flex-wrap:nowrap;overflow-x:auto;">' + "".join(parts) + "</div>"
+        )
+
     pipeline_eval = st.session_state.get("pipeline_eval")
     judge_done = pipeline_eval is not None
     judge_bg = "d1fae5" if judge_done else "f5f3ff"
@@ -268,11 +267,11 @@ def _render_html_pipeline_status(
     judge_color = "065f46" if judge_done else "4c1d95"
     judge_badge = "✅" if judge_done else "⬜"
     judge_label = "Evaluated" if judge_done else "Available"
-    parts.append(
-        '<div style="color:#7c3aed;font-size:16px;flex-shrink:0;padding:0 4px;">'
-        "&#8212;&#9654;</div>"
-    )
-    parts.append(
+    judge_html = (
+        '<div style="display:flex;align-items:center;justify-content:center;gap:8px;'
+        'margin-top:10px;font-family:sans-serif;">'
+        '<div style="font-size:12px;color:#7c3aed;font-weight:600;">After END</div>'
+        '<div style="color:#7c3aed;font-size:16px;flex-shrink:0;">&#8212;&#9654;</div>'
         f'<div style="background:#{judge_bg};border:2px dashed #{judge_border};'
         f"color:#{judge_color};border-radius:10px;padding:10px 14px;min-width:110px;"
         "text-align:center;font-family:sans-serif;font-size:13px;flex-shrink:0;"
@@ -280,13 +279,20 @@ def _render_html_pipeline_status(
         '<div style="font-weight:700;">🔍 LLM Judge</div>'
         f'<div style="font-size:11px;margin-top:4px;">{judge_badge} {judge_label}</div>'
         "</div>"
+        "</div>"
     )
 
     html = (
-        '<div style="display:flex;align-items:center;justify-content:center;'
-        "flex-wrap:nowrap;gap:2px;padding:18px 12px;"
-        "background:rgba(99,102,241,0.04);border-radius:12px;"
-        'border:1px solid rgba(99,102,241,0.15);overflow-x:auto;">' + "".join(parts) + "</div>"
+        '<div style="padding:18px 12px;background:rgba(99,102,241,0.04);'
+        'border-radius:12px;border:1px solid rgba(99,102,241,0.15);">'
+        f"{_row_html(PIPELINE_ROWS[0])}"
+        '<div style="display:flex;justify-content:center;padding:8px 0 6px 0;">'
+        '<div style="font-family:sans-serif;font-size:12px;font-weight:600;color:#64748b;">'
+        "continues ↓"
+        "</div></div>"
+        f"{_row_html(PIPELINE_ROWS[1])}"
+        f"{judge_html}"
+        "</div>"
     )
     st.markdown(html, unsafe_allow_html=True)
 
@@ -1035,7 +1041,15 @@ second run will show an "enriched with memory" banner.
 # Observability tab
 # ---------------------------------------------------------------------------
 
-_OBS_NODE_ORDER = ["profiler", "analyst", "visualizer", "reporter", "rag_storage"]
+_OBS_NODE_ORDER = [
+    "profiler",
+    "analyst",
+    "critic",
+    "uncertainty",
+    "visualizer",
+    "reporter",
+    "rag_storage",
+]
 _OBS_STATUS_EMOJI: dict[str, str] = {
     "success": "✅",
     "failed": "❌",
@@ -1537,7 +1551,7 @@ def main() -> None:
         "<h3 style='margin-bottom:4px;'>🔄 Pipeline Status</h3>",
         unsafe_allow_html=True,
     )
-    st.caption("START → Profiler → Analyst → Visualizer → Reporter → RAG Storage → END")
+    st.caption(PIPELINE_STATUS_CAPTION)
     diagram_area = st.empty()
 
     result: dict[str, Any] | None = st.session_state.get("analysis_result")

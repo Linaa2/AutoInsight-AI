@@ -1,8 +1,11 @@
 """LLM client factory for AutoInsight-AI.
 
 Supports Ollama (primary, local) and Gemini (optional cloud fallback).
-Model selection is task-aware: use the text model for profiler/analyst/reporter
-and the code model for visualizer/text-to-code agents.
+For Ollama, model routing is task-aware:
+
+- ``OLLAMA_LIGHT_MODEL`` for short, low-complexity text tasks
+- ``OLLAMA_TEXT_MODEL`` for standard reasoning / synthesis
+- ``OLLAMA_CODE_MODEL`` for code generation
 
 All model names and provider settings are read from :mod:`config.settings`
 (which in turn reads from ``.env`` / environment variables).
@@ -21,6 +24,27 @@ from config.settings import settings
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
 
+LLMKind = Literal["light", "text", "code"]
+LLMTask = Literal[
+    "profiler",
+    "analyst",
+    "critic",
+    "reporter",
+    "uncertainty",
+    "categorizer",
+    "visualizer",
+]
+
+_TASK_TO_KIND: dict[LLMTask, LLMKind] = {
+    "profiler": "light",
+    "analyst": "text",
+    "critic": "text",
+    "reporter": "text",
+    "uncertainty": "light",
+    "categorizer": "light",
+    "visualizer": "code",
+}
+
 
 # ---------------------------------------------------------------------------
 # LLMClient
@@ -32,19 +56,26 @@ class LLMClient:
 
     Usage::
 
+        llm = LLMClient.get_light_llm()   # for fast, low-complexity text tasks
         llm = LLMClient.get_code_llm()    # for visualizer / text-to-code
-        llm = LLMClient.get_text_llm()    # for profiler / analyst / reporter
+        llm = LLMClient.get_text_llm()    # for standard reasoning / synthesis
         llm = LLMClient.get_llm("code")   # equivalent to get_code_llm()
+        llm = LLMClient.get_task_llm("profiler")
     """
+
+    @staticmethod
+    def get_light_llm() -> BaseChatModel:
+        """Return a chat model for short, low-complexity text tasks."""
+        return LLMClient._build(LLMClient._default_model("light"))
 
     @staticmethod
     def get_text_llm() -> BaseChatModel:
         """Return a chat model for text generation tasks.
 
-        Used by: Profiler, Analyst, Reporter agents.
+        Used by: Analyst, Critic, Reporter agents.
         Model: ``OLLAMA_TEXT_MODEL`` setting (default ``qwen3:14b``).
         """
-        return LLMClient._build(settings.OLLAMA_TEXT_MODEL)
+        return LLMClient._build(LLMClient._default_model("text"))
 
     @staticmethod
     def get_code_llm() -> BaseChatModel:
@@ -53,21 +84,49 @@ class LLMClient:
         Used by: Visualizer, Text-to-Code agents.
         Model: ``OLLAMA_CODE_MODEL`` setting (default ``qwen2.5-coder:14b``).
         """
-        return LLMClient._build(settings.OLLAMA_CODE_MODEL)
+        return LLMClient._build(LLMClient._default_model("code"))
 
     @staticmethod
-    def get_llm(kind: Literal["text", "code"] = "text") -> BaseChatModel:
-        """Return a text or code model by task name.
+    def get_llm(kind: LLMKind = "text") -> BaseChatModel:
+        """Return a light, text, or code model by complexity tier.
 
         Args:
-            kind: ``"text"`` for generation tasks, ``"code"`` for code tasks.
+            kind: ``"light"`` | ``"text"`` | ``"code"``.
         """
+        if kind == "light":
+            return LLMClient.get_light_llm()
         if kind == "code":
             return LLMClient.get_code_llm()
         return LLMClient.get_text_llm()
 
     @staticmethod
-    def _build(model: str) -> BaseChatModel:
+    def get_task_llm(task: LLMTask) -> BaseChatModel:
+        """Return the routed model for a concrete pipeline task."""
+        return LLMClient.get_llm(LLMClient._task_kind(task))
+
+    @staticmethod
+    def _task_kind(task: LLMTask) -> LLMKind:
+        """Map a task name to its complexity tier."""
+        return _TASK_TO_KIND[task]
+
+    @staticmethod
+    def _default_model(kind: LLMKind = "text") -> str:
+        """Return the provider-appropriate default model for *kind*."""
+        if settings.LLM_PROVIDER == "gemini":
+            return settings.GEMINI_MODEL
+        if kind == "light":
+            return settings.OLLAMA_LIGHT_MODEL
+        if kind == "code":
+            return settings.OLLAMA_CODE_MODEL
+        return settings.OLLAMA_TEXT_MODEL
+
+    @staticmethod
+    def _build(
+        model: str,
+        *,
+        timeout: int | None = None,
+        keep_alive: int | str | None = None,
+    ) -> BaseChatModel:
         """Instantiate the LangChain chat model for the configured provider."""
         if settings.LLM_PROVIDER == "gemini":
             from langchain_google_genai import ChatGoogleGenerativeAI
@@ -75,9 +134,10 @@ class LLMClient:
             kwargs = LLMClient._with_timeout(
                 ChatGoogleGenerativeAI,
                 {
-                    "model": settings.GEMINI_MODEL,
+                    "model": model,
                     "convert_system_message_to_human": True,
                 },
+                timeout=timeout,
             )
             return ChatGoogleGenerativeAI(
                 **kwargs,
@@ -88,11 +148,19 @@ class LLMClient:
                 "model": model,
                 "base_url": settings.OLLAMA_BASE_URL,
             },
+            timeout=timeout,
+            keep_alive=keep_alive,
         )
         return ChatOllama(**kwargs)
 
     @staticmethod
-    def _with_timeout(model_cls: type, kwargs: dict[str, Any]) -> dict[str, Any]:
+    def _with_timeout(
+        model_cls: type,
+        kwargs: dict[str, Any],
+        *,
+        timeout: int | None = None,
+        keep_alive: int | str | None = None,
+    ) -> dict[str, Any]:
         """Attach timeout configuration when the provider supports it.
 
         LangChain integrations are not fully consistent about the constructor
@@ -100,19 +168,34 @@ class LLMClient:
         arguments the target class accepts.
         """
         resolved = dict(kwargs)
+        timeout_value = settings.LLM_TIMEOUT if timeout is None else timeout
         try:
             params = inspect.signature(model_cls).parameters
         except (TypeError, ValueError):
             return resolved
 
         if "timeout" in params:
-            resolved.setdefault("timeout", settings.LLM_TIMEOUT)
+            resolved.setdefault("timeout", timeout_value)
         elif "request_timeout" in params:
-            resolved.setdefault("request_timeout", settings.LLM_TIMEOUT)
-        elif "client_kwargs" in params:
-            client_kwargs = dict(resolved.get("client_kwargs") or {})
-            client_kwargs.setdefault("timeout", settings.LLM_TIMEOUT)
-            resolved["client_kwargs"] = client_kwargs
+            resolved.setdefault("request_timeout", timeout_value)
+        else:
+            # ChatOllama (langchain_ollama) routes sync calls through a sync
+            # httpx client configured via `sync_client_kwargs`, and async calls
+            # through one configured via `client_kwargs` / `async_client_kwargs`.
+            # We must set the timeout on BOTH; otherwise synchronous chain.invoke()
+            # calls fall back to httpx's 5-second read-timeout default, which is
+            # far too short for large models that need to load from disk.
+            for ck_key in ("client_kwargs", "async_client_kwargs", "sync_client_kwargs"):
+                if ck_key in params:
+                    ck = dict(resolved.get(ck_key) or {})
+                    ck.setdefault("timeout", timeout_value)
+                    resolved[ck_key] = ck
+
+        # Keep the model loaded in Ollama between pipeline steps so subsequent
+        # nodes don't pay a cold-start penalty (model load can take 30-60 s).
+        if "keep_alive" in params:
+            keep_alive_value = timeout_value if keep_alive is None else keep_alive
+            resolved.setdefault("keep_alive", keep_alive_value)
 
         return resolved
 
@@ -127,6 +210,10 @@ def call_llm_with_messages(
     human: str,
     model: str | None = None,
     callbacks: list | None = None,
+    timeout: int | None = None,
+    *,
+    kind: LLMKind = "text",
+    task: LLMTask | None = None,
 ) -> str:
     """Send a system+human message pair and return the model response.
 
@@ -137,25 +224,35 @@ def call_llm_with_messages(
         human:     Human turn content.
         model:     Optional model name override.
         callbacks: Optional list of LangChain callbacks (e.g. LangFuse handler).
+        timeout:   Optional per-call timeout override in seconds.
+        kind:      Complexity tier used when *model* is omitted.
+        task:      Concrete task name used to route to the right complexity tier.
     """
-    llm = LLMClient._build(model or settings.OLLAMA_TEXT_MODEL)
+    resolved_kind = LLMClient._task_kind(task) if task is not None else kind
+    resolved_model = model or LLMClient._default_model(resolved_kind)
+    llm = LLMClient._build(resolved_model, timeout=timeout)
     messages = [SystemMessage(content=system), HumanMessage(content=human)]
     try:
         response = llm.invoke(messages, config={"callbacks": callbacks or []})
         return str(response.content)
     except Exception as exc:
-        resolved = model or settings.OLLAMA_TEXT_MODEL
         raise RuntimeError(
-            f"LLM call failed (model={resolved!r}, provider={settings.LLM_PROVIDER!r}): {exc}"
+            f"LLM call failed (model={resolved_model!r}, provider={settings.LLM_PROVIDER!r}): {exc}"
         ) from exc
 
 
-def call_llm(prompt: str, model: str | None = None) -> str:
+def call_llm(
+    prompt: str,
+    model: str | None = None,
+    *,
+    kind: LLMKind = "text",
+    task: LLMTask | None = None,
+) -> str:
     """Send a single prompt string and return the model response.
 
     Legacy helper — prefer ``LLMClient`` + ``ChatPromptTemplate`` for new code.
     """
-    return call_llm_with_messages(system="", human=prompt, model=model)
+    return call_llm_with_messages(system="", human=prompt, model=model, kind=kind, task=task)
 
 
 def check_ollama_health() -> bool:

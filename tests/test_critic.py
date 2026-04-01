@@ -212,3 +212,121 @@ def test_critic_node_no_insights():
     result = critic_node({"insights": []})
     assert result.get("error") is not None
     assert len(result.get("critiques", [])) == 0
+
+
+def test_critic_batches_multiple_insights(monkeypatch):
+    """Multiple insights should be critiqued in a single batch LLM call."""
+    calls: list[str] = []
+
+    def fake_call(*, system, human, task, **kwargs):  # noqa: ARG001
+        calls.append(human)
+        assert task == "critic"
+        return """
+        {
+          "critiques": [
+            {
+              "index": 0,
+              "insight_title": "Insight A",
+              "strengths": "Well-supported.",
+              "weaknesses": "Some caveats.",
+              "alternatives": "Could be seasonality.",
+              "confidence": "high",
+              "verdict": "supported"
+            },
+            {
+              "index": 1,
+              "insight_title": "Insight B",
+              "strengths": "Reasonable signal.",
+              "weaknesses": "Small sample.",
+              "alternatives": "Could be noise.",
+              "confidence": "medium",
+              "verdict": "partially_supported"
+            }
+          ]
+        }
+        """
+
+    monkeypatch.setattr("agents.critic.call_llm_with_messages", fake_call)
+
+    insights = [
+        {
+            "title": "Insight A",
+            "observation": "Observation A",
+            "hypothesis": "Hypothesis A",
+            "recommendation": "Recommendation A",
+            "priority": "high",
+        },
+        {
+            "title": "Insight B",
+            "observation": "Observation B",
+            "hypothesis": "Hypothesis B",
+            "recommendation": "Recommendation B",
+            "priority": "medium",
+        },
+    ]
+
+    result = CriticAgent().run(insights=insights, profile_data=get_mock_state()["profile_data"])
+
+    assert len(calls) == 1
+    assert len(result["critiques"]) == 2
+    assert result["critiques"][0]["insight_title"] == "Insight A"
+    assert result["critiques"][1]["insight_title"] == "Insight B"
+
+
+def test_critic_batch_falls_back_to_single_for_missing_items(monkeypatch):
+    """Missing batch results should fall back to the single-insight path."""
+    calls: list[str] = []
+
+    def fake_call(*, system, human, task, **kwargs):  # noqa: ARG001
+        calls.append(human)
+        if "### Insight 1" in human:
+            return """
+            {
+              "critiques": [
+                {
+                  "index": 0,
+                  "insight_title": "Insight A",
+                  "strengths": "Well-supported.",
+                  "weaknesses": "Some caveats.",
+                  "alternatives": "Could be seasonality.",
+                  "confidence": "high",
+                  "verdict": "supported"
+                }
+              ]
+            }
+            """
+
+        return """
+        {
+          "strengths": "Reasonable signal.",
+          "weaknesses": "Small sample.",
+          "alternatives": "Could be noise.",
+          "confidence": "medium",
+          "verdict": "partially_supported"
+        }
+        """
+
+    monkeypatch.setattr("agents.critic.call_llm_with_messages", fake_call)
+
+    insights = [
+        {
+            "title": "Insight A",
+            "observation": "Observation A",
+            "hypothesis": "Hypothesis A",
+            "recommendation": "Recommendation A",
+            "priority": "high",
+        },
+        {
+            "title": "Insight B",
+            "observation": "Observation B",
+            "hypothesis": "Hypothesis B",
+            "recommendation": "Recommendation B",
+            "priority": "medium",
+        },
+    ]
+
+    result = CriticAgent().run(insights=insights, profile_data=get_mock_state()["profile_data"])
+
+    assert len(calls) == 2
+    assert len(result["critiques"]) == 2
+    assert result["critiques"][1]["insight_title"] == "Insight B"

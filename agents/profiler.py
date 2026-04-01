@@ -69,7 +69,7 @@ class ProfilerAgent:
 
         profile_summary_json = json.dumps(ctx, indent=2, default=str)
 
-        llm = self._llm_client.get_llm()
+        llm = self._llm_client.get_task_llm("profiler")
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", self._prompts["system"]),

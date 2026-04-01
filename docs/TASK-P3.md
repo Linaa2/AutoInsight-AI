@@ -54,10 +54,13 @@ All contracts are stdlib `dataclasses` defined in `visualization/schemas.py`.
 
 | Method | Env var | Default | Use case |
 |---|---|---|---|
+| `get_light_llm()` | `OLLAMA_LIGHT_MODEL` | `qwen3:4b` | Fast, low-complexity text tasks |
 | `get_text_llm()` | `OLLAMA_TEXT_MODEL` | `qwen3:14b` | Natural language reasoning |
 | `get_code_llm()` | `OLLAMA_CODE_MODEL` | `qwen2.5-coder:14b` | Code generation |
 
 The Visualizer Agent uses `get_code_llm()` because it generates executable Python.
+The centralized task router uses the light tier for profiler / categorizer / uncertainty,
+the text tier for analyst / critic / reporter, and the code tier for visualizer.
 
 Set `LLM_PROVIDER=gemini` to route to Google Gemini instead of Ollama.
 
@@ -108,9 +111,10 @@ With `__builtins__ = {}`:
 |---|---|---|
 | `LLM_PROVIDER` | `ollama` | `"ollama"` or `"gemini"` |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+| `OLLAMA_LIGHT_MODEL` | `qwen3:4b` | Model for light, fast text tasks |
 | `OLLAMA_TEXT_MODEL` | `qwen3:14b` | Model for text/reasoning tasks |
 | `OLLAMA_CODE_MODEL` | `qwen2.5-coder:14b` | Model for code-generation tasks |
-| `LLM_TIMEOUT` | `60` | Request timeout in seconds |
+| `LLM_TIMEOUT` | `300` | Request timeout in seconds |
 | `GEMINI_MODEL` | `gemini-1.5-flash` | Gemini model name (when provider=gemini) |
 | `GOOGLE_API_KEY` | — | Required when `LLM_PROVIDER=gemini` |
 

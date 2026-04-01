@@ -22,7 +22,7 @@ no cost), two by a single LLM call (semantic judgment that rules cannot replicat
 │       Checks: column names, concrete numbers,    │
 │               recommendation quality             │
 │                                                  │
-│   LLM-BASED (1 call per insight)   50 pts max   │
+│   LLM-BASED (1 call per batch)     50 pts max   │
 │   ├── Statistical Evidence     → 0–25 points    │
 │   │   Source: insight + profile_data             │
 │   │   Judges: effect size, statistical support   │
@@ -291,8 +291,9 @@ agents/uncertainty.py
 └── _extract_json(raw: str) → dict | None   # helper
 ```
 
-The `estimate_all` method builds the `critique_map` internally and calls `estimate`
-per insight. The node function calls `estimate_all` and merges the result into state.
+The `estimate_all` method builds the `critique_map` internally, computes rule-based
+drivers once per insight, then scores the LLM-based drivers in batches. The node
+function calls `estimate_all` and merges the result into state.
 
 **The Estimator never crashes.** Every code path ends with a score (fallbacks always
 apply). `estimate` is wrapped in `try/except` at the node level.
@@ -325,10 +326,24 @@ uncertainty:
       "statistical_evidence": {"score": <int>, "reason": "<string>"},
       "critic_assessment":    {"score": <int>, "reason": "<string>"}
     }
+
+  batch_human: |
+    You will receive multiple scoring requests...
+    Reply ONLY with:
+    {
+      "results": [
+        {
+          "index": <int>,
+          "statistical_evidence": {"score": <int>, "reason": "<string>"},
+          "critic_assessment":    {"score": <int>, "reason": "<string>"}
+        }
+      ]
+    }
 ```
 
-Both LLM-based drivers are scored in **one LLM call** per insight to avoid doubling
-the cost. The LLM returns both scores in a single JSON response.
+Both LLM-based drivers are scored in **one LLM call per batch** so the common case
+(3–6 insights) usually requires just one uncertainty-model request for the whole node.
+The LLM returns both scores for every insight in a single JSON response.
 
 ---
 
@@ -338,6 +353,7 @@ the cost. The LLM returns both scores in a single JSON response.
 # Uncertainty Estimator
 EVAL_UNCERTAINTY_HIGH_THRESHOLD: int   = int(os.getenv("EVAL_UNCERTAINTY_HIGH_THRESHOLD", "80"))
 EVAL_UNCERTAINTY_MEDIUM_THRESHOLD: int = int(os.getenv("EVAL_UNCERTAINTY_MEDIUM_THRESHOLD", "50"))
+EVAL_UNCERTAINTY_BATCH_SIZE: int       = int(os.getenv("EVAL_UNCERTAINTY_BATCH_SIZE", "6"))
 ```
 
 Row count and missing % breakpoints are code constants (not env vars) — they encode

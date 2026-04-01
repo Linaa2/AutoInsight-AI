@@ -1,5 +1,7 @@
 .DEFAULT_GOAL := help
 
+PORT ?= 8501
+
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
@@ -34,8 +36,8 @@ check: lint format test pre-commit ## Run all checks (linting, formatting, tests
 
 ci: check typecheck ## Run all checks including type checking (for CI pipelines)
 
-run: ## Run the Streamlit app
-	uv run streamlit run app/main.py
+run: ## Run the Streamlit app (override with PORT=8502)
+	uv run streamlit run app/main.py --server.port $(PORT)
 
 langfuse-up: ## Start LangFuse — auto-generates credentials on first run
 	uv run python scripts/setup_langfuse.py

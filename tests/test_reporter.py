@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.resolve()))
 
 import pytest
 
+from agents.context_digest import build_profile_digest
 from agents.mock_profiler import get_mock_state
 from agents.reporter import (
     ReporterAgent,
@@ -118,6 +119,62 @@ def test_build_insights_summary_empty():
     summary2 = build_insights_summary([])
     assert "No structured insights" in summary2
     print("✅ build_insights_summary (empty): OK")
+
+
+def test_reporter_prefers_compact_structured_context(monkeypatch):
+    """Reporter should use compact structured digests when structured data exists."""
+    captured: dict[str, str] = {}
+    state = get_mock_state()
+
+    def fake_call(*, system, human, callbacks=None, task=None, **kwargs):  # noqa: ARG001
+        captured["human"] = human
+        captured["task"] = task
+        return "# Report"
+
+    monkeypatch.setattr("agents.reporter.call_llm_with_messages", fake_call)
+
+    agent = ReporterAgent()
+    result = agent.run(
+        profiler_output="VERBOSE_PROFILE_MARKDOWN" * 50,
+        analyst_output="VERBOSE_ANALYST_MARKDOWN" * 50,
+        insights=[
+            {
+                "title": "Sales concentrated",
+                "observation": "32% from one region",
+                "hypothesis": "Population density",
+                "recommendation": "Expand regionally",
+                "priority": "high",
+                "category": "distribution",
+            }
+        ],
+        visualizer_output={"charts": [{"spec": {"title": "Sales by Region"}}]},
+        critic_output="VERBOSE_CRITIC_MARKDOWN" * 50,
+        uncertainty_output="VERBOSE_UNCERTAINTY_MARKDOWN" * 50,
+        profile_data=state["profile_data"],
+        critiques=[
+            {
+                "insight_title": "Sales concentrated",
+                "weaknesses": "Population not normalized",
+                "alternatives": "Warehouse placement",
+                "confidence": "medium",
+                "verdict": "partially_supported",
+            }
+        ],
+        confidence_scores=[
+            {
+                "insight_title": "Sales concentrated",
+                "confidence_score": 68,
+                "confidence_level": "medium",
+                "summary": "Medium confidence (68%).",
+            }
+        ],
+    )
+
+    assert result["reporter_output"] == "# Report"
+    assert captured["task"] == "reporter"
+    assert build_profile_digest(state["profile_data"]) in captured["human"]
+    assert "VERBOSE_PROFILE_MARKDOWN" not in captured["human"]
+    assert "VERBOSE_CRITIC_MARKDOWN" not in captured["human"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -8,21 +8,31 @@ from __future__ import annotations
 
 import os
 
+from config.settings import settings
+
 # ---------------------------------------------------------------------------
 # Uncertainty Estimator — confidence-level thresholds (integer 0-100)
 # ---------------------------------------------------------------------------
 
 EVAL_UNCERTAINTY_HIGH_THRESHOLD: int = int(os.getenv("EVAL_UNCERTAINTY_HIGH_THRESHOLD", "80"))
 EVAL_UNCERTAINTY_MEDIUM_THRESHOLD: int = int(os.getenv("EVAL_UNCERTAINTY_MEDIUM_THRESHOLD", "50"))
+EVAL_UNCERTAINTY_BATCH_SIZE: int = int(os.getenv("EVAL_UNCERTAINTY_BATCH_SIZE", "6"))
 
 # ---------------------------------------------------------------------------
 # LLM Judge — model and truncation settings
 # ---------------------------------------------------------------------------
 
-EVAL_JUDGE_MODEL: str = os.getenv(
-    "EVAL_JUDGE_MODEL",
-    os.getenv("OLLAMA_TEXT_MODEL", "qwen3:14b"),
-)
+_eval_model_override = os.getenv("EVAL_JUDGE_MODEL", "").strip()
+if _eval_model_override:
+    EVAL_JUDGE_MODEL: str = _eval_model_override
+elif settings.LLM_PROVIDER == "gemini":
+    EVAL_JUDGE_MODEL = settings.GEMINI_MODEL
+else:
+    EVAL_JUDGE_MODEL = settings.OLLAMA_TEXT_MODEL
+
+# Judge calls are offline evaluation work rather than user-facing pipeline steps,
+# so give them a dedicated budget and never default below 300 seconds.
+EVAL_JUDGE_TIMEOUT: int = int(os.getenv("EVAL_JUDGE_TIMEOUT", str(max(300, settings.LLM_TIMEOUT))))
 EVAL_MAX_SECTION_CHARS: int = int(os.getenv("EVAL_MAX_SECTION_CHARS", "300"))
 EVAL_MAX_INSIGHT_FIELD_CHARS: int = int(os.getenv("EVAL_MAX_INSIGHT_FIELD_CHARS", "150"))
 

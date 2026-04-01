@@ -218,7 +218,7 @@ reporter:
 uncertainty:
   system: |
     You are a statistical evidence evaluator. Your job is to assess the reliability
-    of a data analyst's insight based on two dimensions:
+    of one or more data analyst insights based on two dimensions:
 
     1. **statistical_evidence** (0-25): How well does the observation describe a
        statistically meaningful effect? Consider effect size, sample adequacy, whether
@@ -245,6 +245,7 @@ uncertainty:
     Rules:
     - Do NOT re-evaluate writing quality or data completeness (handled elsewhere).
     - Reply ONLY with valid JSON, no markdown, no backticks, no text before or after.
+    - When multiple insight requests are provided, score each independently.
 
   human: |
     ## Insight
@@ -261,6 +262,26 @@ uncertainty:
     {{
       "statistical_evidence": {{"score": <integer 0-25>, "reason": "<one sentence>"}},
       "critic_assessment":    {{"score": <integer 0-25>, "reason": "<one sentence>"}}
+    }}
+
+  batch_human: |
+    You will receive multiple scoring requests. Each request already includes:
+    - one insight
+    - a compact profile digest limited to the relevant columns
+    - the matching critic analysis (or an empty object)
+
+    {requests_text}
+
+    Score EACH request on BOTH dimensions independently.
+    Reply ONLY with this JSON (no other text):
+    {{
+      "results": [
+        {{
+          "index": <integer>,
+          "statistical_evidence": {{"score": <integer 0-25>, "reason": "<one sentence>"}},
+          "critic_assessment":    {{"score": <integer 0-25>, "reason": "<one sentence>"}}
+        }}
+      ]
     }}
 
 visualizer:
@@ -376,3 +397,26 @@ critic:
     - Consider if missing values or small sample size weaken the insight.
     - Suggest at least one alternative hypothesis the analyst may have overlooked.
     - Return ONLY the JSON object.
+
+  batch_human: |
+    Critique each insight below using the shared dataset profile summary.
+
+    **DATASET PROFILE SUMMARY:**
+    {profile_summary}
+
+    {requests_text}
+
+    Return ONLY valid JSON in this format:
+    {{
+      "critiques": [
+        {{
+          "index": <integer>,
+          "insight_title": "<copy exact title>",
+          "strengths": "...",
+          "weaknesses": "...",
+          "alternatives": "...",
+          "confidence": "high | medium | low",
+          "verdict": "supported | partially_supported | weak"
+        }}
+      ]
+    }}

@@ -12,6 +12,7 @@ The YAML path comes from :mod:`config.settings` — agents never compute it.
 
 from __future__ import annotations
 
+from functools import cache
 from typing import Any
 
 import yaml
@@ -19,6 +20,7 @@ import yaml
 from config.settings import PROMPTS_PATH
 
 
+@cache
 def load_prompt_section(section: str) -> dict[str, Any]:
     """Load a named section from the shared prompts YAML file.
 

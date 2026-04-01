@@ -27,7 +27,11 @@ import logging
 import re
 from typing import Any, ClassVar
 
-from evaluation.config import EVAL_UNCERTAINTY_HIGH_THRESHOLD, EVAL_UNCERTAINTY_MEDIUM_THRESHOLD
+from evaluation.config import (
+    EVAL_UNCERTAINTY_BATCH_SIZE,
+    EVAL_UNCERTAINTY_HIGH_THRESHOLD,
+    EVAL_UNCERTAINTY_MEDIUM_THRESHOLD,
+)
 from utils.llm import call_llm_with_messages
 from utils.prompt_loader import load_prompt_section
 
@@ -58,6 +62,12 @@ _CONFIDENCE_SCORES: dict[str, int] = {
 # Default score used when no critique AND LLM unavailable
 _DEFAULT_CRITIC_SCORE = 12
 _DEFAULT_LLM_SCORE = 12
+
+
+def _chunked(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
+    """Split *items* into consecutive chunks of size *size* (minimum 1)."""
+    chunk_size = max(1, size)
+    return [items[i : i + chunk_size] for i in range(0, len(items), chunk_size)]
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +313,7 @@ def _compute_llm_scores(
             system=system_prompt,
             human=human_prompt,
             callbacks=callbacks,
+            task="uncertainty",
         )
 
         parsed = _extract_json(raw)
@@ -329,6 +340,153 @@ def _compute_llm_scores(
     except Exception as exc:
         logger.warning(f"UncertaintyEstimator: LLM call failed — {exc}")
         return {"statistical_evidence": stat_fallback, "critic_assessment": critic_fallback}
+
+
+def _build_llm_request(
+    index: int,
+    insight: dict[str, Any],
+    critique: dict[str, Any],
+    profile_data: dict[str, Any],
+) -> dict[str, Any]:
+    """Build one LLM scoring request plus deterministic fallbacks."""
+    if not critique:
+        critic_fallback_score = _DEFAULT_CRITIC_SCORE
+        critic_fallback_reason = "No critique available — default score applied"
+    else:
+        verdict = str(critique.get("verdict", "")).lower()
+        confidence = str(critique.get("confidence", "")).lower()
+        critic_fallback_score = (
+            _VERDICT_SCORES.get(verdict)
+            or _CONFIDENCE_SCORES.get(confidence)
+            or _DEFAULT_CRITIC_SCORE
+        )
+        critic_fallback_reason = (
+            f"Critic verdict='{verdict}', confidence='{confidence}' (LLM unavailable)"
+        )
+
+    return {
+        "index": index,
+        "title": str(insight.get("title", "Untitled")),
+        "insight_payload": {
+            k: insight.get(k, "") for k in ("title", "observation", "hypothesis", "recommendation")
+        },
+        "critique_payload": critique or {},
+        "profile_digest": _build_profile_digest(insight, profile_data),
+        "stat_fallback": {"score": _DEFAULT_LLM_SCORE, "reason": "LLM unavailable — default score"},
+        "critic_fallback": {
+            "score": critic_fallback_score,
+            "reason": critic_fallback_reason,
+        },
+    }
+
+
+def _extract_driver_from_payload(
+    payload: dict[str, Any],
+    key: str,
+    fallback: dict[str, Any],
+) -> dict[str, Any]:
+    """Extract one driver score from an LLM JSON payload with safe fallback."""
+    raw_val = payload.get(key, {})
+    if not isinstance(raw_val, dict):
+        return fallback
+    try:
+        score = max(0, min(25, int(raw_val.get("score", fallback["score"]))))
+        reason = str(raw_val.get("reason", fallback["reason"]))
+        return {"score": score, "reason": reason}
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _compute_llm_scores_batch(
+    requests: list[dict[str, Any]],
+    callbacks: list[Any] | None = None,
+) -> dict[int, dict[str, dict[str, Any]]]:
+    """Score a batch of insight requests in one LLM call.
+
+    Returns a dict keyed by request index. Missing / invalid results fall back to
+    each request's deterministic default scores.
+    """
+    if not requests:
+        return {}
+
+    fallback_results = {
+        int(req["index"]): {
+            "statistical_evidence": dict(req["stat_fallback"]),
+            "critic_assessment": dict(req["critic_fallback"]),
+        }
+        for req in requests
+    }
+
+    blocks: list[str] = []
+    for req in requests:
+        blocks.append(
+            "\n".join(
+                [
+                    f"### Request {req['index']}",
+                    "**Insight:**",
+                    "```json",
+                    json.dumps(req["insight_payload"], ensure_ascii=False, indent=2),
+                    "```",
+                    "",
+                    "**Relevant Dataset Profile:**",
+                    str(req["profile_digest"]),
+                    "",
+                    "**Critic Analysis:**",
+                    "```json",
+                    json.dumps(req["critique_payload"], ensure_ascii=False, indent=2),
+                    "```",
+                ]
+            )
+        )
+
+    try:
+        system_prompt: str = PROMPTS["uncertainty"]["system"]
+        human_prompt: str = PROMPTS["uncertainty"]["batch_human"].format(
+            requests_text="\n\n".join(blocks)
+        )
+        raw = call_llm_with_messages(
+            system=system_prompt,
+            human=human_prompt,
+            callbacks=callbacks,
+            task="uncertainty",
+        )
+        parsed = _extract_json(raw)
+        if not parsed:
+            logger.warning("UncertaintyEstimator: batch LLM returned unparseable response")
+            return fallback_results
+
+        results_raw = parsed.get("results", [])
+        if not isinstance(results_raw, list):
+            logger.warning("UncertaintyEstimator: batch LLM response missing results list")
+            return fallback_results
+
+        resolved = dict(fallback_results)
+        for item in results_raw:
+            if not isinstance(item, dict):
+                continue
+            try:
+                index = int(item.get("index"))
+            except (TypeError, ValueError):
+                continue
+            if index not in resolved:
+                continue
+            resolved[index] = {
+                "statistical_evidence": _extract_driver_from_payload(
+                    item,
+                    "statistical_evidence",
+                    fallback_results[index]["statistical_evidence"],
+                ),
+                "critic_assessment": _extract_driver_from_payload(
+                    item,
+                    "critic_assessment",
+                    fallback_results[index]["critic_assessment"],
+                ),
+            }
+
+        return resolved
+    except Exception as exc:
+        logger.warning(f"UncertaintyEstimator: batch LLM call failed — {exc}")
+        return fallback_results
 
 
 # ---------------------------------------------------------------------------
@@ -376,39 +534,12 @@ class UncertaintyEstimator:
             dq_score, dq_reason = _compute_data_quality(profile_data)
             sp_score, sp_reason = _compute_specificity(insight, profile_data)
             llm_scores = _compute_llm_scores(insight, critique, profile_data, callbacks)
-
-            stat_ev = llm_scores["statistical_evidence"]
-            crit_as = llm_scores["critic_assessment"]
-
-            total = dq_score + sp_score + stat_ev["score"] + crit_as["score"]
-            level = _determine_level(total)
-            title = str(insight.get("title", "Untitled"))
-
-            return {
-                "insight_title": title,
-                "confidence_score": total,
-                "confidence_level": level,
-                "drivers": {
-                    "data_quality": {"score": dq_score, "max": 25, "reason": dq_reason},
-                    "specificity": {"score": sp_score, "max": 25, "reason": sp_reason},
-                    "statistical_evidence": {
-                        "score": stat_ev["score"],
-                        "max": 25,
-                        "reason": stat_ev["reason"],
-                    },
-                    "critic_assessment": {
-                        "score": crit_as["score"],
-                        "max": 25,
-                        "reason": crit_as["reason"],
-                    },
-                },
-                "summary": (
-                    f"{level.capitalize()} confidence ({total}%). "
-                    f"Data quality: {dq_score}/25 — Specificity: {sp_score}/25 — "
-                    f"Statistical evidence: {stat_ev['score']}/25 — "
-                    f"Critic assessment: {crit_as['score']}/25."
-                ),
-            }
+            return self._build_score_result(
+                insight=insight,
+                data_quality=(dq_score, dq_reason),
+                specificity=(sp_score, sp_reason),
+                llm_scores=llm_scores,
+            )
         except Exception as exc:
             logger.error(f"UncertaintyEstimator.estimate failed: {exc}", exc_info=True)
             title = str(insight.get("title", "Untitled"))
@@ -433,6 +564,50 @@ class UncertaintyEstimator:
                 "summary": f"Scoring failed ({exc}); default 50% applied.",
             }
 
+    @staticmethod
+    def _build_score_result(
+        *,
+        insight: dict[str, Any],
+        data_quality: tuple[int, str],
+        specificity: tuple[int, str],
+        llm_scores: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Assemble the final uncertainty output dict from the four drivers."""
+        dq_score, dq_reason = data_quality
+        sp_score, sp_reason = specificity
+        stat_ev = llm_scores["statistical_evidence"]
+        crit_as = llm_scores["critic_assessment"]
+
+        total = dq_score + sp_score + stat_ev["score"] + crit_as["score"]
+        level = _determine_level(total)
+        title = str(insight.get("title", "Untitled"))
+
+        return {
+            "insight_title": title,
+            "confidence_score": total,
+            "confidence_level": level,
+            "drivers": {
+                "data_quality": {"score": dq_score, "max": 25, "reason": dq_reason},
+                "specificity": {"score": sp_score, "max": 25, "reason": sp_reason},
+                "statistical_evidence": {
+                    "score": stat_ev["score"],
+                    "max": 25,
+                    "reason": stat_ev["reason"],
+                },
+                "critic_assessment": {
+                    "score": crit_as["score"],
+                    "max": 25,
+                    "reason": crit_as["reason"],
+                },
+            },
+            "summary": (
+                f"{level.capitalize()} confidence ({total}%). "
+                f"Data quality: {dq_score}/25 — Specificity: {sp_score}/25 — "
+                f"Statistical evidence: {stat_ev['score']}/25 — "
+                f"Critic assessment: {crit_as['score']}/25."
+            ),
+        }
+
     def estimate_all(
         self,
         insights: list[dict[str, Any]],
@@ -455,12 +630,36 @@ class UncertaintyEstimator:
             str(c.get("insight_title", "")): c for c in (critiques or [])
         }
 
-        scores: list[dict[str, Any]] = []
-        for insight in insights:
+        dq_score, dq_reason = _compute_data_quality(profile_data)
+        requests: list[dict[str, Any]] = []
+        prepared: list[dict[str, Any]] = []
+        for index, insight in enumerate(insights):
             title = str(insight.get("title", ""))
             matching_critique = critique_map.get(title, {})
-            score = self.estimate(insight, matching_critique, profile_data, callbacks)
-            scores.append(score)
+            sp_score, sp_reason = _compute_specificity(insight, profile_data)
+            requests.append(_build_llm_request(index, insight, matching_critique, profile_data))
+            prepared.append(
+                {
+                    "index": index,
+                    "insight": insight,
+                    "data_quality": (dq_score, dq_reason),
+                    "specificity": (sp_score, sp_reason),
+                }
+            )
+
+        llm_scores_by_index: dict[int, dict[str, dict[str, Any]]] = {}
+        for chunk in _chunked(requests, EVAL_UNCERTAINTY_BATCH_SIZE):
+            llm_scores_by_index.update(_compute_llm_scores_batch(chunk, callbacks))
+
+        scores = [
+            self._build_score_result(
+                insight=item["insight"],
+                data_quality=item["data_quality"],
+                specificity=item["specificity"],
+                llm_scores=llm_scores_by_index[item["index"]],
+            )
+            for item in prepared
+        ]
 
         output = UncertaintyFormatter.to_markdown(scores)
         return {"confidence_scores": scores, "uncertainty_output": output}
