@@ -34,7 +34,7 @@ def test_get_task_llm_routes_profiler_to_light_model() -> None:
 
         LLMClient.get_task_llm("profiler")
 
-    mock_build.assert_called_once_with("qwen3:4b")
+    mock_build.assert_called_once_with("qwen3:4b", _kind="light")
 
 
 def test_get_task_llm_routes_reporter_to_standard_text_model() -> None:
@@ -46,7 +46,7 @@ def test_get_task_llm_routes_reporter_to_standard_text_model() -> None:
 
         LLMClient.get_task_llm("reporter")
 
-    mock_build.assert_called_once_with("qwen3:14b")
+    mock_build.assert_called_once_with("qwen3:14b", _kind="text")
 
 
 def test_call_llm_with_messages_uses_task_routing_when_model_is_omitted() -> None:
@@ -62,7 +62,7 @@ def test_call_llm_with_messages_uses_task_routing_when_model_is_omitted() -> Non
         result = call_llm_with_messages("system", "human", task="uncertainty")
 
     assert result == "ok"
-    mock_build.assert_called_once_with("qwen3:4b", timeout=None)
+    mock_build.assert_called_once_with("qwen3:4b", timeout=None, _kind="light")
 
 
 def test_call_llm_with_messages_explicit_model_overrides_task_routing() -> None:
@@ -77,4 +77,4 @@ def test_call_llm_with_messages_explicit_model_overrides_task_routing() -> None:
 
         call_llm_with_messages("system", "human", model="custom-model", task="profiler")
 
-    mock_build.assert_called_once_with("custom-model", timeout=None)
+    mock_build.assert_called_once_with("custom-model", timeout=None, _kind="light")
