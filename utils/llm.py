@@ -14,10 +14,11 @@ All model names and provider settings are read from :mod:`config.settings`
 from __future__ import annotations
 
 import inspect
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
+from pydantic import SecretStr
 
 from config.settings import settings
 
@@ -141,26 +142,26 @@ class LLMClient:
         if settings.LLM_PROVIDER == "openrouter":
             from langchain_openai import ChatOpenAI
 
-            primary = ChatOpenAI(
+            _openai_llm = ChatOpenAI(
                 model=model,
-                api_key=settings.OPENROUTER_API_KEY,
+                api_key=SecretStr(settings.OPENROUTER_API_KEY),
                 base_url="https://openrouter.ai/api/v1",
                 temperature=0,
-                max_tokens=4096,
+                max_tokens=4096,  # type: ignore[call-arg]
             )
             fallback = LLMClient._build_ollama(
                 LLMClient._ollama_model_for_kind(_kind),
                 timeout=timeout,
                 keep_alive=keep_alive,
             )
-            return primary.with_fallbacks([fallback])
+            return cast("BaseChatModel", _openai_llm.with_fallbacks([fallback]))
 
         if settings.LLM_PROVIDER == "groq":
             from langchain_groq import ChatGroq
 
-            primary = ChatGroq(
+            _groq_llm = ChatGroq(
                 model=model,
-                api_key=settings.GROQ_API_KEY,
+                api_key=SecretStr(settings.GROQ_API_KEY),
                 temperature=0,
                 max_tokens=4096,
             )
@@ -169,7 +170,7 @@ class LLMClient:
                 timeout=timeout,
                 keep_alive=keep_alive,
             )
-            return primary.with_fallbacks([fallback])
+            return cast("BaseChatModel", _groq_llm.with_fallbacks([fallback]))
 
         if settings.LLM_PROVIDER == "gemini":
             from langchain_google_genai import ChatGoogleGenerativeAI
@@ -182,13 +183,13 @@ class LLMClient:
                 },
                 timeout=timeout,
             )
-            primary = ChatGoogleGenerativeAI(**kwargs)
+            _gemini_llm = ChatGoogleGenerativeAI(**kwargs)
             fallback = LLMClient._build_ollama(
                 LLMClient._ollama_model_for_kind(_kind),
                 timeout=timeout,
                 keep_alive=keep_alive,
             )
-            return primary.with_fallbacks([fallback])
+            return cast("BaseChatModel", _gemini_llm.with_fallbacks([fallback]))
 
         kwargs = LLMClient._with_timeout(
             ChatOllama,
