@@ -88,6 +88,16 @@ class Settings:
     LLM_TIMEOUT: int = field(default_factory=lambda: _env_int("LLM_TIMEOUT", 300))
     GEMINI_MODEL: str = field(default_factory=lambda: _env("GEMINI_MODEL", "gemini-1.5-flash"))
 
+    # -- Groq (cloud, free tier) --
+    GROQ_API_KEY: str = field(default_factory=lambda: _env("GROQ_API_KEY", ""))
+    GROQ_MODEL: str = field(default_factory=lambda: _env("GROQ_MODEL", "llama-3.3-70b-versatile"))
+
+    # -- OpenRouter (cloud, free tier available) --
+    OPENROUTER_API_KEY: str = field(default_factory=lambda: _env("OPENROUTER_API_KEY", ""))
+    OPENROUTER_MODEL: str = field(
+        default_factory=lambda: _env("OPENROUTER_MODEL", "google/gemma-2-9b-it:free")
+    )
+
     # -- Profiler --
     PROFILER_SAMPLE_ROWS: int = field(default_factory=lambda: _env_int("PROFILER_SAMPLE_ROWS", 5))
     PROFILER_TOP_VALUES: int = field(default_factory=lambda: _env_int("PROFILER_TOP_VALUES", 10))

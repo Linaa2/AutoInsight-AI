@@ -43,6 +43,7 @@ dependencies = [
     "tenacity>=8.3.0",
     "langchain-ollama>=1.0.1",
     "streamlit-flow-component>=1.6.1",
+    "langchain-groq>=1.1.2",
 ]
 
 [project.optional-dependencies]

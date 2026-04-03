@@ -27,6 +27,10 @@ if _eval_model_override:
     EVAL_JUDGE_MODEL: str = _eval_model_override
 elif settings.LLM_PROVIDER == "gemini":
     EVAL_JUDGE_MODEL = settings.GEMINI_MODEL
+elif settings.LLM_PROVIDER == "groq":
+    EVAL_JUDGE_MODEL = settings.GROQ_MODEL
+elif settings.LLM_PROVIDER == "openrouter":
+    EVAL_JUDGE_MODEL = settings.OPENROUTER_MODEL
 else:
     EVAL_JUDGE_MODEL = settings.OLLAMA_TEXT_MODEL
 

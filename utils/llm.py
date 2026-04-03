@@ -66,7 +66,7 @@ class LLMClient:
     @staticmethod
     def get_light_llm() -> BaseChatModel:
         """Return a chat model for short, low-complexity text tasks."""
-        return LLMClient._build(LLMClient._default_model("light"))
+        return LLMClient._build(LLMClient._default_model("light"), _kind="light")
 
     @staticmethod
     def get_text_llm() -> BaseChatModel:
@@ -75,7 +75,7 @@ class LLMClient:
         Used by: Analyst, Critic, Reporter agents.
         Model: ``OLLAMA_TEXT_MODEL`` setting (default ``qwen3:14b``).
         """
-        return LLMClient._build(LLMClient._default_model("text"))
+        return LLMClient._build(LLMClient._default_model("text"), _kind="text")
 
     @staticmethod
     def get_code_llm() -> BaseChatModel:
@@ -84,7 +84,7 @@ class LLMClient:
         Used by: Visualizer, Text-to-Code agents.
         Model: ``OLLAMA_CODE_MODEL`` setting (default ``qwen2.5-coder:14b``).
         """
-        return LLMClient._build(LLMClient._default_model("code"))
+        return LLMClient._build(LLMClient._default_model("code"), _kind="code")
 
     @staticmethod
     def get_llm(kind: LLMKind = "text") -> BaseChatModel:
@@ -114,6 +114,10 @@ class LLMClient:
         """Return the provider-appropriate default model for *kind*."""
         if settings.LLM_PROVIDER == "gemini":
             return settings.GEMINI_MODEL
+        if settings.LLM_PROVIDER == "groq":
+            return settings.GROQ_MODEL
+        if settings.LLM_PROVIDER == "openrouter":
+            return settings.OPENROUTER_MODEL
         if kind == "light":
             return settings.OLLAMA_LIGHT_MODEL
         if kind == "code":
@@ -126,8 +130,47 @@ class LLMClient:
         *,
         timeout: int | None = None,
         keep_alive: int | str | None = None,
+        _kind: LLMKind = "text",
     ) -> BaseChatModel:
-        """Instantiate the LangChain chat model for the configured provider."""
+        """Instantiate the LangChain chat model for the configured provider.
+
+        When provider is groq or gemini, the model is wrapped with
+        ``.with_fallbacks([ollama])`` so rate-limit / network errors
+        transparently retry on Ollama.
+        """
+        if settings.LLM_PROVIDER == "openrouter":
+            from langchain_openai import ChatOpenAI
+
+            primary = ChatOpenAI(
+                model=model,
+                api_key=settings.OPENROUTER_API_KEY,
+                base_url="https://openrouter.ai/api/v1",
+                temperature=0,
+                max_tokens=4096,
+            )
+            fallback = LLMClient._build_ollama(
+                LLMClient._ollama_model_for_kind(_kind),
+                timeout=timeout,
+                keep_alive=keep_alive,
+            )
+            return primary.with_fallbacks([fallback])
+
+        if settings.LLM_PROVIDER == "groq":
+            from langchain_groq import ChatGroq
+
+            primary = ChatGroq(
+                model=model,
+                api_key=settings.GROQ_API_KEY,
+                temperature=0,
+                max_tokens=4096,
+            )
+            fallback = LLMClient._build_ollama(
+                LLMClient._ollama_model_for_kind(_kind),
+                timeout=timeout,
+                keep_alive=keep_alive,
+            )
+            return primary.with_fallbacks([fallback])
+
         if settings.LLM_PROVIDER == "gemini":
             from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -139,9 +182,14 @@ class LLMClient:
                 },
                 timeout=timeout,
             )
-            return ChatGoogleGenerativeAI(
-                **kwargs,
+            primary = ChatGoogleGenerativeAI(**kwargs)
+            fallback = LLMClient._build_ollama(
+                LLMClient._ollama_model_for_kind(_kind),
+                timeout=timeout,
+                keep_alive=keep_alive,
             )
+            return primary.with_fallbacks([fallback])
+
         kwargs = LLMClient._with_timeout(
             ChatOllama,
             {
@@ -199,6 +247,31 @@ class LLMClient:
 
         return resolved
 
+    @staticmethod
+    def _build_ollama(
+        model: str,
+        *,
+        timeout: int | None = None,
+        keep_alive: int | str | None = None,
+    ) -> BaseChatModel:
+        """Build an Ollama model instance (used as fallback)."""
+        kwargs = LLMClient._with_timeout(
+            ChatOllama,
+            {"model": model, "base_url": settings.OLLAMA_BASE_URL},
+            timeout=timeout,
+            keep_alive=keep_alive,
+        )
+        return ChatOllama(**kwargs)
+
+    @staticmethod
+    def _ollama_model_for_kind(kind: LLMKind = "text") -> str:
+        """Return the Ollama model name for a given complexity tier."""
+        if kind == "light":
+            return settings.OLLAMA_LIGHT_MODEL
+        if kind == "code":
+            return settings.OLLAMA_CODE_MODEL
+        return settings.OLLAMA_TEXT_MODEL
+
 
 # ---------------------------------------------------------------------------
 # Backward-compatible helpers — kept for existing callers
@@ -230,11 +303,18 @@ def call_llm_with_messages(
     """
     resolved_kind = LLMClient._task_kind(task) if task is not None else kind
     resolved_model = model or LLMClient._default_model(resolved_kind)
-    llm = LLMClient._build(resolved_model, timeout=timeout)
+    llm = LLMClient._build(resolved_model, timeout=timeout, _kind=resolved_kind)
     messages = [SystemMessage(content=system), HumanMessage(content=human)]
     try:
         response = llm.invoke(messages, config={"callbacks": callbacks or []})
-        return str(response.content)
+        content = response.content
+        # Gemini models may return a list of content blocks instead of a plain string
+        if isinstance(content, list):
+            content = "\n".join(
+                block.get("text", "") if isinstance(block, dict) else str(block)
+                for block in content
+            )
+        return str(content)
     except Exception as exc:
         raise RuntimeError(
             f"LLM call failed (model={resolved_model!r}, provider={settings.LLM_PROVIDER!r}): {exc}"

@@ -788,45 +788,42 @@ def _render_artifact_panel(eval_result: Any, key_suffix: str = "") -> None:
             st.dataframe(pd.DataFrame(rows), use_container_width=True, key=f"pi_df{key_suffix}")
 
 
-def _run_llm_judge(result: dict[str, Any]) -> None:
-    """Run the three-artifact LLM Judge evaluation and store in session state."""
+def _run_judge_sync(result: dict[str, Any]) -> None:
+    """Execute the 3 judge LLM calls. Called inside a fragment context."""
     from evaluation.llm_judge import EvaluationAgent
     from evaluation.schemas import PipelineEvaluation
 
     agent = EvaluationAgent()
     pipeline_eval = PipelineEvaluation()
 
-    profile_markdown: str = result.get("profile_markdown", "")
-    profile_data: dict[str, Any] = result.get("profile_data") or {}
-    insights: list[dict[str, Any]] = result.get("insights") or []
-    insights_markdown: str = result.get("insights_markdown", "")
-    report_markdown: str = result.get("report_markdown", "")
-    critiques: list[dict[str, Any]] | None = result.get("critiques")
-    confidence_scores: list[dict[str, Any]] | None = result.get("confidence_scores")
-
-    if profile_markdown:
-        with st.spinner("🔍 Evaluating profiler report…"):
-            pipeline_eval.profiler_eval = agent.evaluate_profiler(profile_markdown, profile_data)
-
-    if insights:
-        with st.spinner("🔍 Evaluating analyst insights…"):
-            pipeline_eval.analyst_eval = agent.evaluate_analyst(
-                insights,
-                profile_markdown,
-                profile_data,
-                critiques=critiques,
-                confidence_scores=confidence_scores,
+    if result.get("profile_markdown"):
+        with st.spinner("🔍 Evaluating profiler report… (this takes ~30s)"):
+            pipeline_eval.profiler_eval = agent.evaluate_profiler(
+                result["profile_markdown"], result.get("profile_data") or {}
             )
 
-    if report_markdown:
-        with st.spinner("🔍 Evaluating final report…"):
+    if result.get("insights"):
+        with st.spinner("🔍 Evaluating analyst insights… (this takes ~30s)"):
+            pipeline_eval.analyst_eval = agent.evaluate_analyst(
+                result["insights"],
+                result.get("profile_markdown", ""),
+                result.get("profile_data") or {},
+                critiques=result.get("critiques"),
+                confidence_scores=result.get("confidence_scores"),
+            )
+
+    if result.get("report_markdown"):
+        with st.spinner("🔍 Evaluating final report… (this takes ~30s)"):
             pipeline_eval.reporter_eval = agent.evaluate_reporter(
-                report_markdown, profile_markdown, insights_markdown
+                result["report_markdown"],
+                result.get("profile_markdown", ""),
+                result.get("insights_markdown", ""),
             )
 
     st.session_state["pipeline_eval"] = pipeline_eval
 
 
+@st.fragment
 def _render_llm_judge_tab(result: dict[str, Any], key_suffix: str = "") -> None:
     """Render the LLM Judge post-run quality evaluation tab."""
     st.markdown("### 🔍 LLM-as-Judge Quality Evaluation")
@@ -838,11 +835,18 @@ def _render_llm_judge_tab(result: dict[str, Any], key_suffix: str = "") -> None:
 
     pipeline_eval: PipelineEvaluation | None = st.session_state.get("pipeline_eval")
 
-    if st.button("▶ Run Evaluation", type="primary", key=f"run_eval{key_suffix}"):
-        _run_llm_judge(result)
-        st.rerun()
+    # Show error from previous judge attempt
+    judge_error = st.session_state.pop("_judge_error", None)
+    if judge_error:
+        st.error(f"LLM Judge failed: {judge_error}")
 
     if pipeline_eval is None:
+        if st.button("▶ Run Evaluation", type="primary", key="run_eval_judge"):
+            try:
+                _run_judge_sync(result)
+                st.rerun(scope="fragment")
+            except Exception as exc:
+                st.error(f"LLM Judge failed: {exc}")
         st.info(
             "Click **Run Evaluation** to score profiler, analyst, and reporter output quality. "
             "Results persist until you upload a new file or re-run the pipeline."
@@ -1559,8 +1563,17 @@ def main() -> None:
 
     # Render initial or final diagram state
     _initial_trace: list[dict[str, Any]] = result.get("graph_trace", []) if result else []
-    with diagram_area.container():
-        render_pipeline_diagram(_initial_trace, key_suffix="_main")
+    if result is not None:
+        # Post-analysis: use static HTML to avoid streamlit_flow phantom reruns
+        with diagram_area.container():
+            _render_html_pipeline_status(
+                list({e["node"] for e in _initial_trace if "node" in e}),
+                "",
+                _initial_trace,
+            )
+    else:
+        with diagram_area.container():
+            render_pipeline_diagram(_initial_trace, key_suffix="_main")
 
     st.divider()
 
