@@ -24,7 +24,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# Use an explicit path so .env is always found regardless of the process CWD
+# (e.g. Streamlit changes working directory during startup).
+# override=True makes .env the authoritative single source of truth — any
+# shell-exported variable with the same name is replaced by the .env value.
+_DOTENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(_DOTENV_PATH, override=True)
 
 # ---------------------------------------------------------------------------
 # Repo layout — computed once, never from env
